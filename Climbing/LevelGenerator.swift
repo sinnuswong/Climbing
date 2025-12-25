@@ -5,6 +5,7 @@ struct LevelGeneratorConfig: Hashable {
     var depth: Int
     var maxHeight: Int
     var holeChance: Double
+    var edgeHoleBoost: Double
     var pathLengthFactor: Double
     var avoidEdgeBias: Double
     var turnBias: Double
@@ -16,6 +17,7 @@ struct LevelGeneratorConfig: Hashable {
         depth: 9,
         maxHeight: 8,
         holeChance: 0.25,
+        edgeHoleBoost: 0.18,
         pathLengthFactor: 0.65,
         avoidEdgeBias: 0.65,
         turnBias: 0.6,
@@ -72,10 +74,20 @@ enum LevelGenerator {
             }
 
             let holeChance = clamp(config.holeChance, min: 0.0, max: 0.6)
+            let edgeHoleBoost = clamp(config.edgeHoleBoost, min: 0.0, max: 0.6)
             for y in 0..<depth {
                 for x in 0..<width {
-                    if pathSet.contains(GridPoint(x: x, y: y)) { continue }
-                    if rng.nextDouble() < holeChance {
+                    let point = GridPoint(x: x, y: y)
+                    if pathSet.contains(point) { continue }
+                    let isEdgeCell = isEdge(point, width: width, depth: depth)
+                    let isNearEdgeCell = isNearEdge(point, width: width, depth: depth)
+                    var holeProbability = holeChance
+                    if isEdgeCell {
+                        holeProbability = min(0.95, holeProbability + edgeHoleBoost)
+                    } else if isNearEdgeCell {
+                        holeProbability = min(0.95, holeProbability + edgeHoleBoost * 0.5)
+                    }
+                    if rng.nextDouble() < holeProbability {
                         grid[y][x] = 0
                     } else {
                         let height = rng.nextInt(maxHeight - 1) + 1
@@ -128,13 +140,6 @@ enum LevelGenerator {
                     .filter { !visited.contains($0) }
 
                 if neighbors.isEmpty { break }
-
-                if path.count > 2 {
-                    let interior = neighbors.filter { !isEdge($0, width: width, depth: depth) }
-                    if !interior.isEmpty {
-                        neighbors = interior
-                    }
-                }
 
                 var weighted: [(GridPoint, Double)] = []
                 weighted.reserveCapacity(neighbors.count)

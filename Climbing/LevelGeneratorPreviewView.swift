@@ -35,9 +35,6 @@ struct LevelGeneratorPreviewView: View {
             }
         }
         .onAppear { regenerate() }
-        .onChange(of: config) { _ in
-            regenerate()
-        }
     }
 
     private var levelGrid: some View {
@@ -71,16 +68,16 @@ struct LevelGeneratorPreviewView: View {
             Stepper("Levels: \(levelCount)", value: $levelCount, in: 1...30)
 
             sliderRow(title: "Holes", value: $config.holeChance, range: 0.0...0.6)
+            sliderRow(title: "Edge Holes", value: $config.edgeHoleBoost, range: 0.0...0.6)
             sliderRow(title: "Path Length", value: $config.pathLengthFactor, range: 0.3...0.85)
             sliderRow(title: "Avoid Edge", value: $config.avoidEdgeBias, range: 0.0...0.85)
             sliderRow(title: "Turn Bias", value: $config.turnBias, range: 0.0...0.85)
 
             HStack {
-                Button("Regenerate") { regenerate() }
+                Button("Generate") { regenerate() }
                 Spacer()
                 Button("New Seed") {
                     config.seed = UInt64.random(in: 1...999_999)
-                    regenerate()
                 }
             }
             .buttonStyle(.bordered)
