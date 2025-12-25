@@ -13,9 +13,10 @@ final class GameScene {
     private let topLift: Float = 0.01
 
     private var level: Level?
-    private var tileEntities: [GridPoint: ModelEntity] = [:]
-    private var highlighted: [GridPoint] = []
+    private var tileEntities: [VoxelPoint: ModelEntity] = [:]
+    private var highlighted: [VoxelPoint] = []
     private var playerEntity: ModelEntity?
+    private var goalEntity: Entity?
     private var mapOffset = SIMD3<Float>(0, 0, 0)
 
     private var blockMaterial: UnlitMaterial
@@ -47,18 +48,19 @@ final class GameScene {
         cameraController = CameraController(arView: arView)
     }
 
-    func build(level: Level, playerStart: GridPoint) {
+    func build(level: Level, playerStart: VoxelPoint, goal: VoxelPoint) {
         self.level = level
         tileEntities.removeAll()
         highlighted.removeAll()
         rootAnchor.children.removeAll()
+        goalEntity = nil
 
         let mapWidth = Float(level.width - 1) * blockSize
         let mapDepth = Float(level.depth - 1) * blockSize
         mapOffset = SIMD3<Float>(-mapWidth / 2.0, 0, -mapDepth / 2.0)
 
         let cubeMesh = MeshResource.generateBox(size: blockSize)
-        let topMesh = MeshResource.generateBox(size: SIMD3<Float>(blockSize, capThickness, blockSize))
+        let topMesh = MeshResource.generatePlane(width: blockSize, depth: blockSize)
 
         var minX = Float.greatestFiniteMagnitude
         var maxX = -Float.greatestFiniteMagnitude
@@ -67,38 +69,37 @@ final class GameScene {
         var maxY: Float = 0
         var hasBlocks = false
 
-        for y in 0..<level.depth {
-            for x in 0..<level.width {
-                let height = level.height(at: GridPoint(x: x, y: y))
-                if height <= 0 { continue }
-                hasBlocks = true
-                let centerX = Float(x) * blockSize + mapOffset.x
-                let centerZ = Float(y) * blockSize + mapOffset.z
-                let half = blockSize / 2.0
-                minX = Swift.min(minX, centerX - half)
-                maxX = Swift.max(maxX, centerX + half)
-                minZ = Swift.min(minZ, centerZ - half)
-                maxZ = Swift.max(maxZ, centerZ + half)
-                maxY = Swift.max(maxY, Float(height) * blockSize)
+        for z in 0..<level.heightCount {
+            for y in 0..<level.depth {
+                for x in 0..<level.width {
+                    guard level.isSolid(x: x, y: y, z: z) else { continue }
+                    hasBlocks = true
+                    let centerX = Float(x) * blockSize + mapOffset.x
+                    let centerZ = Float(y) * blockSize + mapOffset.z
+                    let half = blockSize / 2.0
+                    minX = Swift.min(minX, centerX - half)
+                    maxX = Swift.max(maxX, centerX + half)
+                    minZ = Swift.min(minZ, centerZ - half)
+                    maxZ = Swift.max(maxZ, centerZ + half)
+                    maxY = Swift.max(maxY, (Float(z) + 1.0) * blockSize)
 
-                for layer in 0..<height {
-                    let yPosition = (Float(layer) + 0.5) * blockSize
+                    let yPosition = (Float(z) + 0.5) * blockSize
                     let position = SIMD3<Float>(centerX, yPosition, centerZ)
                     let block = ModelEntity(mesh: cubeMesh, materials: [blockMaterial])
                     block.position = position
                     rootAnchor.addChild(block)
+
+                    guard level.isStandable(x: x, y: y, z: z) else { continue }
+                    let topY = (Float(z) + 1.0) * blockSize + topLift
+                    let topPosition = SIMD3<Float>(centerX, topY, centerZ)
+                    let top = ModelEntity(mesh: topMesh, materials: [topMaterial])
+                    top.position = topPosition
+                    top.name = "tile_\(x)_\(y)_\(z)"
+                    top.collision = CollisionComponent(shapes: [.generateBox(size: SIMD3<Float>(blockSize, capThickness, blockSize))])
+                    top.physicsBody = PhysicsBodyComponent(mode: .static)
+                    tileEntities[VoxelPoint(x: x, y: y, z: z)] = top
+                    rootAnchor.addChild(top)
                 }
-
-                let topY = Float(height) * blockSize - (capThickness / 2.0) + topLift
-                let topPosition = SIMD3<Float>(centerX, topY, centerZ)
-                let top = ModelEntity(mesh: topMesh, materials: [topMaterial])
-                top.position = topPosition
-                top.name = "tile_\(x)_\(y)"
-                top.collision = CollisionComponent(shapes: [.generateBox(size: SIMD3<Float>(blockSize, capThickness, blockSize))])
-                top.physicsBody = PhysicsBodyComponent(mode: .static)
-                tileEntities[GridPoint(x: x, y: y)] = top
-                rootAnchor.addChild(top)
-
             }
         }
 
@@ -107,6 +108,7 @@ final class GameScene {
         playerEntity = player
         rootAnchor.addChild(player)
         movePlayer(to: playerStart, animated: false)
+        addGoalFlag(at: goal)
 
         let targetX = hasBlocks ? (minX + maxX) * 0.5 : 0
         let targetZ = hasBlocks ? (minZ + maxZ) * 0.5 : 0
@@ -118,11 +120,37 @@ final class GameScene {
         cameraController.reset(target: target, distance: distance, pitch: 0.85)
     }
 
-    func movePlayer(to point: GridPoint, animated: Bool) {
-        guard let level else { return }
+    private func addGoalFlag(at goal: VoxelPoint) {
+        let poleHeight = blockSize * 1.4
+        let poleSize = SIMD3<Float>(0.08, poleHeight, 0.08)
+        let poleMesh = MeshResource.generateBox(size: poleSize)
+        let poleMaterial = UnlitMaterial(color: UIColor(red: 0.2, green: 0.2, blue: 0.22, alpha: 1.0))
+        let pole = ModelEntity(mesh: poleMesh, materials: [poleMaterial])
+
+        let flagSize = SIMD3<Float>(0.5, 0.28, 0.04)
+        let flagMesh = MeshResource.generateBox(size: flagSize)
+        let flagMaterial = UnlitMaterial(color: UIColor(red: 0.9, green: 0.2, blue: 0.2, alpha: 1.0))
+        let flag = ModelEntity(mesh: flagMesh, materials: [flagMaterial])
+
+        let baseY = (Float(goal.z) + 1.0) * blockSize
+        let centerX = Float(goal.x) * blockSize + mapOffset.x
+        let centerZ = Float(goal.y) * blockSize + mapOffset.z
+
+        pole.position = SIMD3<Float>(centerX, baseY + poleHeight / 2.0, centerZ)
+        flag.position = SIMD3<Float>(centerX + 0.28, baseY + poleHeight * 0.75, centerZ)
+
+        let flagRoot = Entity()
+        flagRoot.name = "tile_\(goal.x)_\(goal.y)_\(goal.z)"
+        flagRoot.addChild(pole)
+        flagRoot.addChild(flag)
+        rootAnchor.addChild(flagRoot)
+        goalEntity = flagRoot
+    }
+
+    func movePlayer(to point: VoxelPoint, animated: Bool) {
         guard let playerEntity else { return }
 
-        let height = Float(level.height(at: point))
+        let height = Float(point.z + 1)
         let position = SIMD3<Float>(
             Float(point.x) * blockSize + mapOffset.x,
             height * blockSize + playerHeight / 2.0,
@@ -137,7 +165,7 @@ final class GameScene {
         }
     }
 
-    func showPath(_ path: [GridPoint]) {
+    func showPath(_ path: [VoxelPoint]) {
         clearHighlights()
         highlighted = path
         for point in path {

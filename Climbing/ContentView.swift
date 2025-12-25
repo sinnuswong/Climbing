@@ -24,7 +24,7 @@ struct ContentView: View {
             Button("Next Level") { viewModel.advanceLevel() }
             Button("Keep Looking", role: .cancel) { viewModel.dismissWinAlert() }
         } message: {
-            Text("You reached the highest point.")
+            Text("You reached the flag.")
         }
 #if DEBUG
         .sheet(isPresented: $showGenerator) {
@@ -40,7 +40,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Level \(viewModel.levelIndex + 1)")
                     .font(.headline)
-                Text("Height \(viewModel.currentHeight)")
+                Text("Z \(viewModel.currentHeight)")
                 Text("Steps \(viewModel.steps)")
                 if let message = viewModel.statusMessage {
                     Text(message)

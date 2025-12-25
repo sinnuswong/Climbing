@@ -4,7 +4,8 @@ import Foundation
 final class GameViewModel: ObservableObject {
     @Published private(set) var levelIndex: Int = 0
     @Published private(set) var level: Level
-    @Published private(set) var playerPosition: GridPoint
+    @Published private(set) var playerPosition: VoxelPoint
+    @Published private(set) var goalPosition: VoxelPoint
     @Published private(set) var steps: Int = 0
     @Published private(set) var currentHeight: Int = 0
     @Published private(set) var statusMessage: String?
@@ -16,11 +17,11 @@ final class GameViewModel: ObservableObject {
     private var customLevel: Level?
     private var isCustomLevel: Bool = false
 
-    var onMovePlayer: ((GridPoint, Bool) -> Void)?
-    var onShowPath: (([GridPoint]) -> Void)?
+    var onMovePlayer: ((VoxelPoint, Bool) -> Void)?
+    var onShowPath: (([VoxelPoint]) -> Void)?
     var onClearPath: (() -> Void)?
     var onResetCamera: (() -> Void)?
-    var onLoadLevel: ((Level, GridPoint) -> Void)?
+    var onLoadLevel: ((Level, VoxelPoint, VoxelPoint) -> Void)?
 
     init() {
         let loadedLevels = LevelLoader.loadLevels()
@@ -28,12 +29,13 @@ final class GameViewModel: ObservableObject {
         levels = loadedLevels
         level = initialLevel
         playerPosition = initialLevel.start
-        currentHeight = initialLevel.height(at: initialLevel.start)
+        goalPosition = initialLevel.goal(from: initialLevel.start)
+        currentHeight = initialLevel.start.z
     }
 
-    func connectScene(load: @escaping (Level, GridPoint) -> Void,
-                      move: @escaping (GridPoint, Bool) -> Void,
-                      showPath: @escaping ([GridPoint]) -> Void,
+    func connectScene(load: @escaping (Level, VoxelPoint, VoxelPoint) -> Void,
+                      move: @escaping (VoxelPoint, Bool) -> Void,
+                      showPath: @escaping ([VoxelPoint]) -> Void,
                       clearPath: @escaping () -> Void,
                       resetCamera: @escaping () -> Void) {
         onLoadLevel = load
@@ -42,10 +44,10 @@ final class GameViewModel: ObservableObject {
         onClearPath = clearPath
         onResetCamera = resetCamera
 
-        load(level, playerPosition)
+        load(level, playerPosition, goalPosition)
     }
 
-    func handleTap(at point: GridPoint) {
+    func handleTap(at point: VoxelPoint) {
         guard !isAutoRunning else { return }
         movePlayerIfPossible(to: point, animated: true)
     }
@@ -53,7 +55,7 @@ final class GameViewModel: ObservableObject {
     func showHint() {
         statusMessage = nil
         guard let path = findPath(from: playerPosition) else {
-            statusMessage = "No path"
+            statusMessage = "No path to the flag"
             return
         }
         onShowPath?(path)
@@ -63,7 +65,7 @@ final class GameViewModel: ObservableObject {
         guard !isAutoRunning else { return }
         statusMessage = nil
         guard let path = findPath(from: playerPosition) else {
-            statusMessage = "No path"
+            statusMessage = "No path to the flag"
             return
         }
 
@@ -102,30 +104,30 @@ final class GameViewModel: ObservableObject {
         applyLevel(level, index: 0, custom: true)
     }
 
-    private func movePlayerIfPossible(to target: GridPoint, animated: Bool) {
+    private func movePlayerIfPossible(to target: VoxelPoint, animated: Bool) {
         guard isLegalMove(from: playerPosition, to: target) else { return }
         onClearPath?()
         playerPosition = target
         steps += 1
-        currentHeight = level.height(at: playerPosition)
+        currentHeight = playerPosition.z
         onMovePlayer?(playerPosition, animated)
         checkWin()
     }
 
-    private func isLegalMove(from: GridPoint, to: GridPoint) -> Bool {
+    private func isLegalMove(from: VoxelPoint, to: VoxelPoint) -> Bool {
         let dx = abs(from.x - to.x)
         let dy = abs(from.y - to.y)
         guard dx + dy == 1 else { return false }
-
-        let fromHeight = level.height(at: from)
-        let toHeight = level.height(at: to)
-        guard toHeight > 0 else { return false }
-        return (toHeight - fromHeight) <= 1
+        let column = GridPoint(x: to.x, y: to.y)
+        guard let landingHeight = level.landingHeight(from: from, to: column) else {
+            return false
+        }
+        return landingHeight == to.z
     }
 
     private func checkWin() {
-        if currentHeight == level.maxHeight, !showWinAlert {
-            statusMessage = "Reached the top!"
+        if playerPosition == goalPosition, !showWinAlert {
+            statusMessage = "Reached the flag!"
             showWinAlert = true
             isAutoRunning = false
             hintTask?.cancel()
@@ -147,48 +149,56 @@ final class GameViewModel: ObservableObject {
         levelIndex = index
         level = newLevel
         playerPosition = newLevel.start
-        currentHeight = newLevel.height(at: playerPosition)
-        onLoadLevel?(newLevel, playerPosition)
+        goalPosition = newLevel.goal(from: newLevel.start)
+        currentHeight = newLevel.start.z
+        onLoadLevel?(newLevel, playerPosition, goalPosition)
     }
 
-    private func findPath(from start: GridPoint) -> [GridPoint]? {
-        let targetHeight = level.maxHeight
-        var queue: [GridPoint] = [start]
+    private func findPath(from start: VoxelPoint) -> [VoxelPoint]? {
+        let target = goalPosition
+        var queue: [VoxelPoint] = [start]
         var visited = Set([start])
-        var parent: [GridPoint: GridPoint] = [:]
+        var parent: [VoxelPoint: VoxelPoint] = [:]
         var index = 0
 
         while index < queue.count {
             let current = queue[index]
             index += 1
 
-            if level.height(at: current) == targetHeight {
+            if current == target {
                 return buildPath(from: current, parent: parent, start: start)
             }
 
             for neighbor in neighbors(of: current) {
                 if visited.contains(neighbor) { continue }
-                if isLegalMove(from: current, to: neighbor) {
-                    visited.insert(neighbor)
-                    parent[neighbor] = current
-                    queue.append(neighbor)
-                }
+                visited.insert(neighbor)
+                parent[neighbor] = current
+                queue.append(neighbor)
             }
         }
 
         return nil
     }
 
-    private func neighbors(of point: GridPoint) -> [GridPoint] {
-        [
+    private func neighbors(of point: VoxelPoint) -> [VoxelPoint] {
+        let columns = [
             GridPoint(x: point.x + 1, y: point.y),
             GridPoint(x: point.x - 1, y: point.y),
             GridPoint(x: point.x, y: point.y + 1),
             GridPoint(x: point.x, y: point.y - 1),
         ]
+        var results: [VoxelPoint] = []
+        results.reserveCapacity(columns.count)
+        for column in columns {
+            guard column.x >= 0, column.x < level.width,
+                  column.y >= 0, column.y < level.depth else { continue }
+            guard let landingHeight = level.landingHeight(from: point, to: column) else { continue }
+            results.append(VoxelPoint(x: column.x, y: column.y, z: landingHeight))
+        }
+        return results
     }
 
-    private func buildPath(from end: GridPoint, parent: [GridPoint: GridPoint], start: GridPoint) -> [GridPoint] {
+    private func buildPath(from end: VoxelPoint, parent: [VoxelPoint: VoxelPoint], start: VoxelPoint) -> [VoxelPoint] {
         var path = [end]
         var current = end
         while current != start {

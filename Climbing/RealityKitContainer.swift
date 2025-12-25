@@ -10,8 +10,8 @@ struct RealityKitContainer: UIViewRepresentable {
         context.coordinator.scene = scene
 
         viewModel.connectScene(
-            load: { [weak scene] level, start in
-                scene?.build(level: level, playerStart: start)
+            load: { [weak scene] level, start, goal in
+                scene?.build(level: level, playerStart: start, goal: goal)
             },
             move: { [weak scene] point, animated in
                 scene?.movePlayer(to: point, animated: animated)
@@ -57,7 +57,7 @@ struct RealityKitContainer: UIViewRepresentable {
             guard let arView = scene?.arView else { return }
             let location = gesture.location(in: arView)
             guard let entity = arView.entity(at: location) else { return }
-            if let point = parseGridPoint(from: entity) {
+            if let point = parseVoxelPoint(from: entity) {
                 Task { @MainActor in
                     viewModel.handleTap(at: point)
                 }
@@ -72,7 +72,7 @@ struct RealityKitContainer: UIViewRepresentable {
             scene?.cameraController.handlePinch(gesture)
         }
 
-        private func parseGridPoint(from entity: Entity) -> GridPoint? {
+        private func parseVoxelPoint(from entity: Entity) -> VoxelPoint? {
             if let point = parseName(entity.name) {
                 return point
             }
@@ -82,15 +82,16 @@ struct RealityKitContainer: UIViewRepresentable {
             return nil
         }
 
-        private func parseName(_ name: String) -> GridPoint? {
+        private func parseName(_ name: String) -> VoxelPoint? {
             guard name.hasPrefix("tile_") else { return nil }
             let parts = name.split(separator: "_")
-            guard parts.count == 3,
+            guard parts.count == 4,
                   let x = Int(parts[1]),
-                  let y = Int(parts[2]) else {
+                  let y = Int(parts[2]),
+                  let z = Int(parts[3]) else {
                 return nil
             }
-            return GridPoint(x: x, y: y)
+            return VoxelPoint(x: x, y: y, z: z)
         }
     }
 }

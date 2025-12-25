@@ -3,9 +3,10 @@ import Foundation
 struct LevelGeneratorConfig: Hashable {
     var width: Int
     var depth: Int
-    var maxHeight: Int
-    var holeChance: Double
-    var edgeHoleBoost: Double
+    var height: Int
+    var fillChance: Double
+    var heightFalloff: Double
+    var pairChance: Double
     var pathLengthFactor: Double
     var avoidEdgeBias: Double
     var turnBias: Double
@@ -15,9 +16,10 @@ struct LevelGeneratorConfig: Hashable {
     static let `default` = LevelGeneratorConfig(
         width: 9,
         depth: 9,
-        maxHeight: 8,
-        holeChance: 0.25,
-        edgeHoleBoost: 0.18,
+        height: 8,
+        fillChance: 0.16,
+        heightFalloff: 0.45,
+        pairChance: 0.6,
         pathLengthFactor: 0.65,
         avoidEdgeBias: 0.65,
         turnBias: 0.6,
@@ -43,15 +45,20 @@ enum LevelGenerator {
         var rng = SeededGenerator(seed: seed ?? config.seed)
         let width = max(3, config.width)
         let depth = max(3, config.depth)
-        let maxHeight = max(2, config.maxHeight)
-        let start = GridPoint(x: 0, y: depth - 1)
-        let minPathLength = max(Int(Double(width * depth) * clamp(config.pathLengthFactor, min: 0.2, max: 0.9)), maxHeight + 1)
+        let height = max(2, config.height)
+        let startColumn = GridPoint(x: 0, y: depth - 1)
+        let start = VoxelPoint(x: startColumn.x, y: startColumn.y, z: 0)
+        let targetHeight = height - 1
+        let minPathLength = max(
+            Int(Double(width * depth) * clamp(config.pathLengthFactor, min: 0.2, max: 0.9)),
+            targetHeight + 1
+        )
 
         for _ in 0..<max(10, config.maxAttempts) {
             guard let path = generatePath(
                 width: width,
                 depth: depth,
-                start: start,
+                start: startColumn,
                 minLength: minPathLength,
                 config: config,
                 rng: &rng
@@ -61,43 +68,64 @@ enum LevelGenerator {
 
             guard let pathHeights = buildPathHeights(
                 stepCount: path.count,
-                maxHeight: maxHeight,
+                maxHeight: targetHeight,
                 rng: &rng
             ) else {
                 continue
             }
 
-            var grid = Array(repeating: Array(repeating: 0, count: width), count: depth)
-            let pathSet = Set(path)
+            var layers = Array(
+                repeating: Array(repeating: Array(repeating: 0, count: width), count: depth),
+                count: height
+            )
+            var protectedAbove = Set<VoxelPoint>()
             for (index, point) in path.enumerated() {
-                grid[point.y][point.x] = pathHeights[index]
+                let z = pathHeights[index]
+                for supportZ in 0...z {
+                    layers[supportZ][point.y][point.x] = 1
+                }
+                if z + 1 < height {
+                    protectedAbove.insert(VoxelPoint(x: point.x, y: point.y, z: z + 1))
+                }
             }
 
-            let holeChance = clamp(config.holeChance, min: 0.0, max: 0.6)
-            let edgeHoleBoost = clamp(config.edgeHoleBoost, min: 0.0, max: 0.6)
-            for y in 0..<depth {
-                for x in 0..<width {
-                    let point = GridPoint(x: x, y: y)
-                    if pathSet.contains(point) { continue }
-                    let isEdgeCell = isEdge(point, width: width, depth: depth)
-                    let isNearEdgeCell = isNearEdge(point, width: width, depth: depth)
-                    var holeProbability = holeChance
-                    if isEdgeCell {
-                        holeProbability = min(0.95, holeProbability + edgeHoleBoost)
-                    } else if isNearEdgeCell {
-                        holeProbability = min(0.95, holeProbability + edgeHoleBoost * 0.5)
+            let fillChance = clamp(config.fillChance, min: 0.0, max: 0.45)
+            let heightFalloff = clamp(config.heightFalloff, min: 0.0, max: 0.85)
+            let pairChance = clamp(config.pairChance, min: 0.0, max: 0.9)
+            for z in 0..<height {
+                let heightFactor = 1.0 - (Double(z) / Double(max(height - 1, 1))) * heightFalloff
+                let additionalTarget = Int(Double(width * depth) * fillChance * max(0.1, heightFactor))
+                let existing = countLayer(layers: layers, z: z)
+                var remaining = min(additionalTarget, width * depth - existing)
+                let attemptLimit = max(width * depth * 6, remaining * 10)
+                for _ in 0..<attemptLimit {
+                    if remaining <= 0 { break }
+                    if rng.nextDouble() < pairChance && remaining > 1 {
+                        if placePair(layers: &layers,
+                                     width: width,
+                                     depth: depth,
+                                     z: z,
+                                     protectedAbove: protectedAbove,
+                                     rng: &rng) {
+                            remaining -= 2
+                            continue
+                        }
                     }
-                    if rng.nextDouble() < holeProbability {
-                        grid[y][x] = 0
-                    } else {
-                        let height = rng.nextInt(maxHeight - 1) + 1
-                        grid[y][x] = min(height, maxHeight - 1)
+                    if placeSingle(layers: &layers,
+                                   width: width,
+                                   depth: depth,
+                                   z: z,
+                                   protectedAbove: protectedAbove,
+                                   rng: &rng) {
+                        remaining -= 1
                     }
                 }
             }
 
-            let level = Level(id: id, width: width, depth: depth, start: start, heights: grid)
-            if isReachable(level: level, targetHeight: maxHeight) {
+            enforceFloatingAdjacency(layers: &layers, width: width, depth: depth, height: height, maxDistance: 2)
+
+            let level = Level(id: id, width: width, depth: depth, height: height, start: start, layers: layers)
+            if isReachable(level: level, targetHeight: targetHeight) {
                 return level
             }
         }
@@ -177,7 +205,7 @@ enum LevelGenerator {
                                          maxHeight: Int,
                                          rng: inout SeededGenerator) -> [Int]? {
         guard stepCount > 0 else { return nil }
-        let incrementsNeeded = maxHeight - 1
+        let incrementsNeeded = maxHeight
         let stepSlots = stepCount - 1
         guard stepSlots >= incrementsNeeded else { return nil }
 
@@ -189,7 +217,7 @@ enum LevelGenerator {
         }
 
         var heights = Array(repeating: 0, count: stepCount)
-        heights[0] = 1
+        heights[0] = 0
         for index in 1..<stepCount {
             heights[index] = heights[index - 1] + steps[index - 1]
         }
@@ -197,35 +225,150 @@ enum LevelGenerator {
     }
 
     private static func isReachable(level: Level, targetHeight: Int) -> Bool {
-        var queue: [GridPoint] = [level.start]
-        var visited: Set<GridPoint> = [level.start]
+        var queue: [VoxelPoint] = [level.start]
+        var visited: Set<VoxelPoint> = [level.start]
         var index = 0
 
         while index < queue.count {
             let current = queue[index]
             index += 1
 
-            if level.height(at: current) == targetHeight {
+            if current.z == targetHeight {
                 return true
             }
 
-            for neighbor in neighborPoints(of: current, width: level.width, depth: level.depth) {
+            for neighbor in neighbors(of: current, level: level) {
                 if visited.contains(neighbor) { continue }
-                if isLegalMove(level: level, from: current, to: neighbor) {
-                    visited.insert(neighbor)
-                    queue.append(neighbor)
-                }
+                visited.insert(neighbor)
+                queue.append(neighbor)
             }
         }
 
         return false
     }
 
-    private static func isLegalMove(level: Level, from: GridPoint, to: GridPoint) -> Bool {
-        let fromHeight = level.height(at: from)
-        let toHeight = level.height(at: to)
-        guard toHeight > 0 else { return false }
-        return (toHeight - fromHeight) <= 1
+    private static func neighbors(of point: VoxelPoint, level: Level) -> [VoxelPoint] {
+        let columns = [
+            GridPoint(x: point.x + 1, y: point.y),
+            GridPoint(x: point.x - 1, y: point.y),
+            GridPoint(x: point.x, y: point.y + 1),
+            GridPoint(x: point.x, y: point.y - 1),
+        ]
+        var results: [VoxelPoint] = []
+        results.reserveCapacity(columns.count)
+        for column in columns {
+            guard column.x >= 0, column.x < level.width,
+                  column.y >= 0, column.y < level.depth else { continue }
+            guard let landingHeight = level.landingHeight(from: point, to: column) else { continue }
+            results.append(VoxelPoint(x: column.x, y: column.y, z: landingHeight))
+        }
+        return results
+    }
+
+    private static func countLayer(layers: [[[Int]]], z: Int) -> Int {
+        guard z >= 0, z < layers.count else { return 0 }
+        var count = 0
+        for row in layers[z] {
+            for value in row where value != 0 {
+                count += 1
+            }
+        }
+        return count
+    }
+
+    private static func placeSingle(layers: inout [[[Int]]],
+                                    width: Int,
+                                    depth: Int,
+                                    z: Int,
+                                    protectedAbove: Set<VoxelPoint>,
+                                    rng: inout SeededGenerator) -> Bool {
+        let x = rng.nextInt(width)
+        let y = rng.nextInt(depth)
+        if layers[z][y][x] != 0 { return false }
+        if protectedAbove.contains(VoxelPoint(x: x, y: y, z: z)) { return false }
+        if !isSupported(layers: layers, x: x, y: y, z: z) { return false }
+        layers[z][y][x] = 1
+        return true
+    }
+
+    private static func placePair(layers: inout [[[Int]]],
+                                  width: Int,
+                                  depth: Int,
+                                  z: Int,
+                                  protectedAbove: Set<VoxelPoint>,
+                                  rng: inout SeededGenerator) -> Bool {
+        let directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+        let dir = directions[rng.nextInt(directions.count)]
+        let x = rng.nextInt(width)
+        let y = rng.nextInt(depth)
+        let nx = x + dir.0
+        let ny = y + dir.1
+        if nx < 0 || nx >= width || ny < 0 || ny >= depth { return false }
+        if layers[z][y][x] != 0 || layers[z][ny][nx] != 0 { return false }
+        if protectedAbove.contains(VoxelPoint(x: x, y: y, z: z)) { return false }
+        if protectedAbove.contains(VoxelPoint(x: nx, y: ny, z: z)) { return false }
+        let supportA = isSupported(layers: layers, x: x, y: y, z: z)
+        let supportB = isSupported(layers: layers, x: nx, y: ny, z: z)
+        if !supportA && !supportB { return false }
+        layers[z][y][x] = 1
+        layers[z][ny][nx] = 1
+        return true
+    }
+
+    private static func isSupported(layers: [[[Int]]], x: Int, y: Int, z: Int) -> Bool {
+        if z == 0 { return true }
+        return layers[z - 1][y][x] != 0
+    }
+
+    private static func enforceFloatingAdjacency(layers: inout [[[Int]]],
+                                                 width: Int,
+                                                 depth: Int,
+                                                 height: Int,
+                                                 maxDistance: Int) {
+        guard height > 1 else { return }
+        for z in 1..<height {
+            var anchored = Array(repeating: Array(repeating: false, count: width), count: depth)
+            for y in 0..<depth {
+                for x in 0..<width {
+                    if layers[z][y][x] != 0 && layers[z - 1][y][x] != 0 {
+                        anchored[y][x] = true
+                    }
+                }
+            }
+
+            for y in 0..<depth {
+                for x in 0..<width {
+                    if layers[z][y][x] == 0 { continue }
+                    if layers[z - 1][y][x] != 0 { continue }
+                    if hasAnchoredNeighbor(x: x, y: y, anchored: anchored, maxDistance: maxDistance) {
+                        continue
+                    }
+                    for supportZ in 0..<z {
+                        layers[supportZ][y][x] = 1
+                    }
+                    anchored[y][x] = true
+                }
+            }
+        }
+    }
+
+    private static func hasAnchoredNeighbor(x: Int,
+                                            y: Int,
+                                            anchored: [[Bool]],
+                                            maxDistance: Int) -> Bool {
+        let depth = anchored.count
+        guard depth > 0 else { return false }
+        let width = anchored[0].count
+        for dx in -maxDistance...maxDistance {
+            for dy in -maxDistance...maxDistance {
+                if abs(dx) + abs(dy) > maxDistance { continue }
+                let nx = x + dx
+                let ny = y + dy
+                if nx < 0 || nx >= width || ny < 0 || ny >= depth { continue }
+                if anchored[ny][nx] { return true }
+            }
+        }
+        return false
     }
 
     private static func neighborPoints(of point: GridPoint, width: Int, depth: Int) -> [GridPoint] {

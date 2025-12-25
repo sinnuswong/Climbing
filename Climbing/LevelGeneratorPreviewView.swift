@@ -9,6 +9,7 @@ struct LevelGeneratorPreviewView: View {
     @State private var levelCount: Int = 10
     @State private var showJson = false
     @State private var didCopy = false
+    @State private var layerIndex: Int = 0
     private let onPlayLevel: (Level) -> Void
 
     init(onPlayLevel: @escaping (Level) -> Void = { _ in }) {
@@ -38,37 +39,46 @@ struct LevelGeneratorPreviewView: View {
     }
 
     private var levelGrid: some View {
-        let gridItems = Array(repeating: GridItem(.fixed(18), spacing: 2), count: config.width)
-        return LazyVGrid(columns: gridItems, spacing: 2) {
-            ForEach(0..<(config.depth * config.width), id: \.self) { index in
-                let x = index % config.width
-                let y = index / config.width
-                let value = level.heights[safe: y]?[safe: x] ?? 0
-                ZStack {
-                    Rectangle()
-                        .fill(colorForHeight(value))
-                    Rectangle()
-                        .stroke(.black.opacity(0.25), lineWidth: 1)
-                    if value > 0 {
-                        Text("\(value)")
-                            .font(.caption2)
-                            .foregroundStyle(.black.opacity(0.7))
+        let gridItems = Array(repeating: GridItem(.fixed(18), spacing: 2), count: level.width)
+        let maxLayer = max(level.height - 1, 0)
+        let currentLayer = min(layerIndex, maxLayer)
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Layer Z \(currentLayer)")
+                .font(.headline)
+            LazyVGrid(columns: gridItems, spacing: 2) {
+                ForEach(0..<(level.depth * level.width), id: \.self) { index in
+                    let x = index % level.width
+                    let y = index / level.width
+                    let value = level.layers[safe: currentLayer]?[safe: y]?[safe: x] ?? 0
+                    let isStandable = level.isStandable(x: x, y: y, z: currentLayer)
+                    ZStack {
+                        Rectangle()
+                            .fill(colorForVoxel(value, layer: currentLayer))
+                        Rectangle()
+                            .stroke(.black.opacity(0.25), lineWidth: 1)
+                        if isStandable {
+                            Circle()
+                                .fill(.yellow.opacity(0.85))
+                                .frame(width: 6, height: 6)
+                        }
                     }
+                    .frame(width: 18, height: 18)
                 }
-                .frame(width: 18, height: 18)
             }
         }
     }
 
     private var controls: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Stepper("Width: \(config.width)", value: $config.width, in: 5...13)
-            Stepper("Depth: \(config.depth)", value: $config.depth, in: 5...13)
-            Stepper("Max Height: \(config.maxHeight)", value: $config.maxHeight, in: 4...12)
+            Stepper("Width: \(config.width)", value: $config.width, in: 5...20)
+            Stepper("Depth: \(config.depth)", value: $config.depth, in: 5...20)
+            Stepper("Height: \(config.height)", value: $config.height, in: 4...20)
             Stepper("Levels: \(levelCount)", value: $levelCount, in: 1...30)
+            Stepper("Layer: \(layerIndex)", value: $layerIndex, in: 0...max(level.height - 1, 0))
 
-            sliderRow(title: "Holes", value: $config.holeChance, range: 0.0...0.6)
-            sliderRow(title: "Edge Holes", value: $config.edgeHoleBoost, range: 0.0...0.6)
+            sliderRow(title: "Fill Chance", value: $config.fillChance, range: 0.0...0.4)
+            sliderRow(title: "Height Falloff", value: $config.heightFalloff, range: 0.0...0.8)
+            sliderRow(title: "Pair Chance", value: $config.pairChance, range: 0.0...0.8)
             sliderRow(title: "Path Length", value: $config.pathLengthFactor, range: 0.3...0.85)
             sliderRow(title: "Avoid Edge", value: $config.avoidEdgeBias, range: 0.0...0.85)
             sliderRow(title: "Turn Bias", value: $config.turnBias, range: 0.0...0.85)
@@ -110,6 +120,7 @@ struct LevelGeneratorPreviewView: View {
     private func regenerate() {
         level = LevelGenerator.generateLevel(id: 1, config: config)
         didCopy = false
+        layerIndex = min(layerIndex, max(level.height - 1, 0))
     }
 
     private var jsonString: String {
@@ -129,10 +140,10 @@ struct LevelGeneratorPreviewView: View {
         }
     }
 
-    private func colorForHeight(_ height: Int) -> Color {
-        if height == 0 { return Color.clear }
-        let t = min(1.0, Double(height) / Double(max(config.maxHeight, 1)))
-        return Color(red: 0.35 + 0.3 * t, green: 0.7 + 0.2 * t, blue: 0.35)
+    private func colorForVoxel(_ value: Int, layer: Int) -> Color {
+        if value == 0 { return Color.clear }
+        let t = min(1.0, Double(layer) / Double(max(level.height - 1, 1)))
+        return Color(red: 0.25 + 0.35 * t, green: 0.6 + 0.25 * t, blue: 0.35 + 0.25 * t)
     }
 }
 
