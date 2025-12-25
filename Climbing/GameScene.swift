@@ -10,11 +10,7 @@ final class GameScene {
     private let blockSize: Float = 1.0
     private let capThickness: Float = 0.12
     private let playerHeight: Float = 0.6
-    private let topLift: Float = 0.0
-    private let edgeThickness: Float = 0.04
-    private let edgeHeight: Float = 0.02
-    private let edgeYOffset: Float = 0.004
-    private let edgeOutset: Float = 0.004
+    private let topLift: Float = 0.01
 
     private var level: Level?
     private var tileEntities: [GridPoint: ModelEntity] = [:]
@@ -22,16 +18,29 @@ final class GameScene {
     private var playerEntity: ModelEntity?
     private var mapOffset = SIMD3<Float>(0, 0, 0)
 
-    private let blockMaterial = UnlitMaterial(color: UIColor(red: 0.62, green: 0.78, blue: 0.92, alpha: 1.0))
-    private let topMaterial = UnlitMaterial(color: UIColor(red: 0.42, green: 0.7, blue: 0.34, alpha: 1.0))
-    private let highlightMaterial = UnlitMaterial(color: UIColor(red: 0.98, green: 0.84, blue: 0.25, alpha: 1.0))
-    private let playerMaterial = UnlitMaterial(color: UIColor(red: 0.15, green: 0.15, blue: 0.16, alpha: 1.0))
-    private let edgeMaterial = UnlitMaterial(color: UIColor(red: 0.02, green: 0.02, blue: 0.02, alpha: 0.95))
+    private var blockMaterial: UnlitMaterial
+    private var topMaterial: UnlitMaterial
+    private var highlightMaterial: UnlitMaterial
+    private var playerMaterial: UnlitMaterial
 
     let cameraController: CameraController
 
     init(arView: ARView) {
         self.arView = arView
+        let lineColor = UIColor(red: 0.02, green: 0.02, blue: 0.02, alpha: 0.95)
+        blockMaterial = GameScene.makeGridMaterial(
+            fill: UIColor(red: 0.62, green: 0.78, blue: 0.92, alpha: 1.0),
+            line: lineColor
+        )
+        topMaterial = GameScene.makeGridMaterial(
+            fill: UIColor(red: 0.42, green: 0.7, blue: 0.34, alpha: 1.0),
+            line: lineColor
+        )
+        highlightMaterial = GameScene.makeGridMaterial(
+            fill: UIColor(red: 0.98, green: 0.84, blue: 0.25, alpha: 1.0),
+            line: lineColor
+        )
+        playerMaterial = UnlitMaterial(color: UIColor(red: 0.15, green: 0.15, blue: 0.16, alpha: 1.0))
         arView.cameraMode = .nonAR
         arView.environment.background = .color(.init(red: 0.95, green: 0.93, blue: 0.85, alpha: 1.0))
         arView.scene.anchors.append(rootAnchor)
@@ -50,9 +59,6 @@ final class GameScene {
 
         let cubeMesh = MeshResource.generateBox(size: blockSize)
         let topMesh = MeshResource.generateBox(size: SIMD3<Float>(blockSize, capThickness, blockSize))
-        let edgeMeshX = MeshResource.generateBox(size: SIMD3<Float>(blockSize, edgeHeight, edgeThickness))
-        let edgeMeshZ = MeshResource.generateBox(size: SIMD3<Float>(edgeThickness, edgeHeight, blockSize))
-        let edgeMeshY = MeshResource.generateBox(size: SIMD3<Float>(edgeThickness, blockSize, edgeThickness))
 
         var minX = Float.greatestFiniteMagnitude
         var maxX = -Float.greatestFiniteMagnitude
@@ -81,15 +87,6 @@ final class GameScene {
                     let block = ModelEntity(mesh: cubeMesh, materials: [blockMaterial])
                     block.position = position
                     rootAnchor.addChild(block)
-
-                    addCubeEdges(
-                        centerX: centerX,
-                        centerY: yPosition,
-                        centerZ: centerZ,
-                        edgeMeshX: edgeMeshX,
-                        edgeMeshZ: edgeMeshZ,
-                        edgeMeshY: edgeMeshY
-                    )
                 }
 
                 let topY = Float(height) * blockSize - (capThickness / 2.0) + topLift
@@ -172,34 +169,6 @@ final class GameScene {
         }
     }
 
-    private func addCubeEdges(centerX: Float,
-                              centerY: Float,
-                              centerZ: Float,
-                              edgeMeshX: MeshResource,
-                              edgeMeshZ: MeshResource,
-                              edgeMeshY: MeshResource) {
-        let half = blockSize / 2.0
-        let topY = centerY + half + edgeYOffset
-        let bottomY = centerY - half - edgeYOffset
-        let xEdge = half + edgeOutset
-        let zEdge = half + edgeOutset
-
-        addEdge(mesh: edgeMeshX, position: SIMD3<Float>(centerX, topY, centerZ + zEdge))
-        addEdge(mesh: edgeMeshX, position: SIMD3<Float>(centerX, topY, centerZ - zEdge))
-        addEdge(mesh: edgeMeshZ, position: SIMD3<Float>(centerX + xEdge, topY, centerZ))
-        addEdge(mesh: edgeMeshZ, position: SIMD3<Float>(centerX - xEdge, topY, centerZ))
-
-        addEdge(mesh: edgeMeshX, position: SIMD3<Float>(centerX, bottomY, centerZ + zEdge))
-        addEdge(mesh: edgeMeshX, position: SIMD3<Float>(centerX, bottomY, centerZ - zEdge))
-        addEdge(mesh: edgeMeshZ, position: SIMD3<Float>(centerX + xEdge, bottomY, centerZ))
-        addEdge(mesh: edgeMeshZ, position: SIMD3<Float>(centerX - xEdge, bottomY, centerZ))
-
-        addEdge(mesh: edgeMeshY, position: SIMD3<Float>(centerX + xEdge, centerY, centerZ + zEdge))
-        addEdge(mesh: edgeMeshY, position: SIMD3<Float>(centerX + xEdge, centerY, centerZ - zEdge))
-        addEdge(mesh: edgeMeshY, position: SIMD3<Float>(centerX - xEdge, centerY, centerZ + zEdge))
-        addEdge(mesh: edgeMeshY, position: SIMD3<Float>(centerX - xEdge, centerY, centerZ - zEdge))
-    }
-
     private func addTopLight(targetX: Float, targetZ: Float, maxY: Float, span: Float) {
         let light = DirectionalLight()
         light.light.intensity = 35000
@@ -211,10 +180,35 @@ final class GameScene {
         rootAnchor.addChild(light)
     }
 
-    private func addEdge(mesh: MeshResource, position: SIMD3<Float>) {
-        let edge = ModelEntity(mesh: mesh, materials: [edgeMaterial])
-        edge.position = position
-        rootAnchor.addChild(edge)
+    private static func makeGridMaterial(fill: UIColor,
+                                         line: UIColor,
+                                         size: Int = 96,
+                                         lineWidth: Int = 2) -> UnlitMaterial {
+        var material = UnlitMaterial(color: .white)
+        guard let cgImage = makeGridImage(fill: fill, line: line, size: size, lineWidth: lineWidth),
+              let texture = try? TextureResource.generate(from: cgImage, withName: nil, options: .init(semantic: .color)) else {
+            material.baseColor = .color(fill)
+            return material
+        }
+        material.baseColor = .texture(texture)
+        return material
+    }
+
+    private static func makeGridImage(fill: UIColor,
+                                      line: UIColor,
+                                      size: Int,
+                                      lineWidth: Int) -> CGImage? {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
+        let image = renderer.image { context in
+            fill.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: size, height: size))
+            let strokeWidth = CGFloat(max(1, lineWidth))
+            let inset = strokeWidth / 2.0
+            context.cgContext.setStrokeColor(line.cgColor)
+            context.cgContext.setLineWidth(strokeWidth)
+            context.cgContext.stroke(CGRect(x: inset, y: inset, width: CGFloat(size) - strokeWidth, height: CGFloat(size) - strokeWidth))
+        }
+        return image.cgImage
     }
 }
 
