@@ -6,61 +6,73 @@
 //
 
 import SwiftUI
-import SwiftData
 
 struct ContentView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query private var items: [Item]
+    @StateObject private var viewModel = GameViewModel()
+#if DEBUG
+    @State private var showGenerator = false
+#endif
 
     var body: some View {
-        NavigationSplitView {
-            List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))")
-                    } label: {
-                        Text(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))
-                    }
-                }
-                .onDelete(perform: deleteItems)
-            }
-#if os(macOS)
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200)
-#endif
-            .toolbar {
-#if os(iOS)
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    EditButton()
-                }
-#endif
-                ToolbarItem {
-                    Button(action: addItem) {
-                        Label("Add Item", systemImage: "plus")
-                    }
-                }
-            }
-        } detail: {
-            Text("Select an item")
+        ZStack(alignment: .topLeading) {
+            RealityKitContainer(viewModel: viewModel)
+                .ignoresSafeArea()
+
+            hudOverlay
         }
+        .alert("Level Complete", isPresented: $viewModel.showWinAlert) {
+            Button("Next Level") { viewModel.advanceLevel() }
+            Button("Keep Looking", role: .cancel) { viewModel.dismissWinAlert() }
+        } message: {
+            Text("You reached the highest point.")
+        }
+#if DEBUG
+        .sheet(isPresented: $showGenerator) {
+            LevelGeneratorPreviewView { level in
+                viewModel.loadCustomLevel(level)
+            }
+        }
+#endif
     }
 
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(timestamp: Date())
-            modelContext.insert(newItem)
-        }
-    }
-
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            for index in offsets {
-                modelContext.delete(items[index])
+    private var hudOverlay: some View {
+        ZStack(alignment: .topLeading) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Level \(viewModel.levelIndex + 1)")
+                    .font(.headline)
+                Text("Height \(viewModel.currentHeight)")
+                Text("Steps \(viewModel.steps)")
+                if let message = viewModel.statusMessage {
+                    Text(message)
+                        .font(.subheadline)
+                        .foregroundStyle(.orange)
+                }
             }
+            .padding(12)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+            .padding(.leading, 16)
+            .padding(.top, 16)
+
+            VStack(spacing: 10) {
+                Button("Auto") { viewModel.startAuto() }
+                    .disabled(viewModel.isAutoRunning)
+                Button("Hint") { viewModel.showHint() }
+                    .disabled(viewModel.isAutoRunning)
+                Button("Reset View") { viewModel.resetCamera() }
+#if DEBUG
+                Button("Generator") { showGenerator = true }
+#endif
+            }
+            .font(.headline)
+            .padding(12)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            .padding(.trailing, 16)
+            .padding(.bottom, 16)
         }
     }
 }
 
 #Preview {
     ContentView()
-        .modelContainer(for: Item.self, inMemory: true)
 }
