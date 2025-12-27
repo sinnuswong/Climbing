@@ -7,6 +7,7 @@ struct LevelGeneratorConfig: Hashable {
     var fillChance: Double
     var heightFalloff: Double
     var pairChance: Double
+    var plateauBreakChance: Double
     var pathLengthFactor: Double
     var avoidEdgeBias: Double
     var turnBias: Double
@@ -20,6 +21,7 @@ struct LevelGeneratorConfig: Hashable {
         fillChance: 0.16,
         heightFalloff: 0.45,
         pairChance: 0.6,
+        plateauBreakChance: 0.3,
         pathLengthFactor: 0.65,
         avoidEdgeBias: 0.65,
         turnBias: 0.6,
@@ -79,11 +81,13 @@ enum LevelGenerator {
                 count: height
             )
             var protectedAbove = Set<VoxelPoint>()
+            var protectedBlocks = Set<VoxelPoint>()
             for (index, point) in path.enumerated() {
                 let z = pathHeights[index]
                 for supportZ in 0...z {
                     layers[supportZ][point.y][point.x] = 1
                 }
+                protectedBlocks.insert(VoxelPoint(x: point.x, y: point.y, z: z))
                 if z + 1 < height {
                     protectedAbove.insert(VoxelPoint(x: point.x, y: point.y, z: z + 1))
                 }
@@ -121,6 +125,14 @@ enum LevelGenerator {
                     }
                 }
             }
+
+            erodePlateaus(layers: &layers,
+                          width: width,
+                          depth: depth,
+                          height: height,
+                          protected: protectedBlocks,
+                          breakChance: clamp(config.plateauBreakChance, min: 0.0, max: 0.8),
+                          rng: &rng)
 
             enforceFloatingAdjacency(layers: &layers, width: width, depth: depth, height: height, maxDistance: 2)
 
@@ -309,7 +321,7 @@ enum LevelGenerator {
         if protectedAbove.contains(VoxelPoint(x: nx, y: ny, z: z)) { return false }
         let supportA = isSupported(layers: layers, x: x, y: y, z: z)
         let supportB = isSupported(layers: layers, x: nx, y: ny, z: z)
-        if !supportA && !supportB { return false }
+        if supportA == supportB { return false }
         layers[z][y][x] = 1
         layers[z][ny][nx] = 1
         return true
@@ -318,6 +330,45 @@ enum LevelGenerator {
     private static func isSupported(layers: [[[Int]]], x: Int, y: Int, z: Int) -> Bool {
         if z == 0 { return true }
         return layers[z - 1][y][x] != 0
+    }
+
+    private static func erodePlateaus(layers: inout [[[Int]]],
+                                      width: Int,
+                                      depth: Int,
+                                      height: Int,
+                                      protected: Set<VoxelPoint>,
+                                      breakChance: Double,
+                                      rng: inout SeededGenerator) {
+        guard height > 1, breakChance > 0 else { return }
+        let maxHeight = max(height - 1, 1)
+        for z in 0..<height {
+            let heightFactor = Double(z) / Double(maxHeight)
+            let chance = breakChance * heightFactor
+            if chance <= 0 { continue }
+            for y in 0..<depth {
+                for x in 0..<width {
+                    if layers[z][y][x] == 0 { continue }
+                    if protected.contains(VoxelPoint(x: x, y: y, z: z)) { continue }
+                    let neighbors = sameLayerNeighborCount(layers: layers, x: x, y: y, z: z)
+                    if neighbors >= 3 && rng.nextDouble() < chance {
+                        layers[z][y][x] = 0
+                    }
+                }
+            }
+        }
+    }
+
+    private static func sameLayerNeighborCount(layers: [[[Int]]], x: Int, y: Int, z: Int) -> Int {
+        let deltas = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+        var count = 0
+        for (dx, dy) in deltas {
+            let nx = x + dx
+            let ny = y + dy
+            if ny < 0 || ny >= layers[z].count { continue }
+            if nx < 0 || nx >= layers[z][ny].count { continue }
+            if layers[z][ny][nx] != 0 { count += 1 }
+        }
+        return count
     }
 
     private static func enforceFloatingAdjacency(layers: inout [[[Int]]],

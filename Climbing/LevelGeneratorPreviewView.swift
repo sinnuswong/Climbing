@@ -79,6 +79,7 @@ struct LevelGeneratorPreviewView: View {
             sliderRow(title: "Fill Chance", value: $config.fillChance, range: 0.0...0.4)
             sliderRow(title: "Height Falloff", value: $config.heightFalloff, range: 0.0...0.8)
             sliderRow(title: "Pair Chance", value: $config.pairChance, range: 0.0...0.8)
+            sliderRow(title: "Plateau Break", value: $config.plateauBreakChance, range: 0.0...0.8)
             sliderRow(title: "Path Length", value: $config.pathLengthFactor, range: 0.3...0.85)
             sliderRow(title: "Avoid Edge", value: $config.avoidEdgeBias, range: 0.0...0.85)
             sliderRow(title: "Turn Bias", value: $config.turnBias, range: 0.0...0.85)
