@@ -16,9 +16,16 @@ struct LevelGenerator2PreviewView: View {
     @State private var sequenceCodes: [Int] = []
     @State private var sequenceInput = ""
     @State private var sequenceError: String?
-    private let onPlayLevel: (Level) -> Void
+    @State private var showDeadEnds = false
+    @State private var deadEndMap: [VoxelPoint: Int] = [:]
+    private let onPlayLevel: (Level, Set<VoxelPoint>) -> Void
+    private static var storedConfig = LevelGenerator2Config.default
+    private static var storedLevelCount: Int = 10
+    private static var storedLayerIndex: Int = 0
+    private static var storedShowJson = false
+    private static var storedShowDeadEnds = false
 
-    init(onPlayLevel: @escaping (Level) -> Void = { _ in }) {
+    init(onPlayLevel: @escaping (Level, Set<VoxelPoint>) -> Void = { _, _ in }) {
         self.onPlayLevel = onPlayLevel
     }
 
@@ -42,7 +49,22 @@ struct LevelGenerator2PreviewView: View {
                 }
             }
         }
-        .onAppear { regenerate() }
+        .onAppear {
+            loadState()
+            regenerate()
+        }
+        .onChange(of: config) { _ in
+            saveState()
+        }
+        .onChange(of: levelCount) { _ in
+            saveState()
+        }
+        .onChange(of: layerIndex) { _ in
+            saveState()
+        }
+        .onChange(of: showJson) { _ in
+            saveState()
+        }
     }
 
     private var levelGrid: some View {
@@ -58,9 +80,15 @@ struct LevelGenerator2PreviewView: View {
                     let y = index / level.width
                     let value = level.layers[safe: currentLayer]?[safe: y]?[safe: x] ?? 0
                     let isStandable = level.isStandable(x: x, y: y, z: currentLayer)
+                    let baseColor = colorForVoxel(value, layer: currentLayer)
+                    let highlight = value == 0 ? nil : deadEndColor(for: VoxelPoint(x: x, y: y, z: currentLayer))
                     ZStack {
                         Rectangle()
-                            .fill(colorForVoxel(value, layer: currentLayer))
+                            .fill(baseColor)
+                        if let highlight {
+                            Rectangle()
+                                .fill(highlight)
+                        }
                         Rectangle()
                             .stroke(.black.opacity(0.25), lineWidth: 1)
                         if isStandable {
@@ -81,6 +109,7 @@ struct LevelGenerator2PreviewView: View {
             Stepper("Depth: \(config.depth)", value: $config.depth, in: 5...20)
             Stepper("Height: \(config.height)", value: $config.height, in: 4...20)
             Stepper("Steps: \(config.steps)", value: $config.steps, in: 5...40)
+            mainRouteSlider
             Stepper("Levels: \(levelCount)", value: $levelCount, in: 1...30)
             Stepper("Layer: \(layerIndex)", value: $layerIndex, in: 0...max(level.height - 1, 0))
             Stepper("Dead Ends: \(config.deadEndCount)", value: $config.deadEndCount, in: 0...20)
@@ -100,13 +129,18 @@ struct LevelGenerator2PreviewView: View {
             }
             .buttonStyle(.bordered)
 
+            Button(showDeadEnds ? "Hide Dead Ends" : "Show Dead Ends") {
+                showDeadEnds.toggle()
+            }
+            .buttonStyle(.bordered)
+
             Button(didCopy ? "Copied" : "Copy JSON") {
                 copyJSON()
             }
             .buttonStyle(.bordered)
 
             Button("Play This Level") {
-                onPlayLevel(level)
+                onPlayLevel(level, Set(deadEndMap.keys))
                 dismiss()
             }
             .buttonStyle(.borderedProminent)
@@ -172,9 +206,10 @@ struct LevelGenerator2PreviewView: View {
     }
 
     private func regenerate() {
-        let result = LevelGenerator2.generateLevelWithSequence(id: 1, config: config)
+        let result = LevelGenerator2.generateLevelWithDebug(id: 1, config: config)
         level = result.level
         sequenceCodes = result.sequence
+        deadEndMap = buildDeadEndMap(paths: result.deadEndPaths)
         didCopy = false
         didCopySequence = false
         didCopyVectors = false
@@ -226,19 +261,22 @@ struct LevelGenerator2PreviewView: View {
                 config.depth = max(config.depth, required.depth)
                 config.height = max(config.height, required.height)
             }
-            if let generated = LevelGenerator2.generateLevelFromSequence(id: 1,
-                                                                         config: config,
-                                                                         sequence: codes,
-                                                                         enforceUniquePredecessor: false,
-                                                                         autoExpand: true) {
-                level = generated
+            if let generated = LevelGenerator2.generateLevelFromSequenceDebug(id: 1,
+                                                                              config: config,
+                                                                              sequence: codes,
+                                                                              enforceUniquePredecessor: false,
+                                                                              autoExpand: true) {
+                level = generated.level
                 sequenceCodes = codes
+                deadEndMap = buildDeadEndMap(paths: generated.deadEndPaths)
                 sequenceError = nil
                 layerIndex = min(layerIndex, max(level.height - 1, 0))
             } else {
+                deadEndMap = [:]
                 sequenceError = "Sequence is invalid for the current size or rules."
             }
         case .failure(let error):
+            deadEndMap = [:]
             sequenceError = error.localizedDescription
         }
     }
@@ -301,6 +339,49 @@ struct LevelGenerator2PreviewView: View {
         return tokens.compactMap { Int($0) }
     }
 
+    private func deadEndColor(for point: VoxelPoint) -> Color? {
+        guard showDeadEnds, let index = deadEndMap[point] else { return nil }
+        let palette = deadEndPalette
+        return palette[index % palette.count]
+    }
+
+    private var deadEndPalette: [Color] {
+        [
+            Color(red: 0.98, green: 0.1, blue: 0.1),
+            Color(red: 0.1, green: 0.85, blue: 0.2),
+            Color(red: 0.1, green: 0.6, blue: 0.98),
+            Color(red: 0.98, green: 0.85, blue: 0.1),
+            Color(red: 0.98, green: 0.1, blue: 0.75),
+            Color(red: 0.2, green: 0.95, blue: 0.9),
+        ]
+    }
+
+    private func buildDeadEndMap(paths: [[VoxelPoint]]) -> [VoxelPoint: Int] {
+        var map: [VoxelPoint: Int] = [:]
+        for (index, path) in paths.enumerated() {
+            for point in path {
+                map[point] = index
+            }
+        }
+        return map
+    }
+
+    private func saveState() {
+        Self.storedConfig = config
+        Self.storedLevelCount = levelCount
+        Self.storedLayerIndex = layerIndex
+        Self.storedShowJson = showJson
+        Self.storedShowDeadEnds = showDeadEnds
+    }
+
+    private func loadState() {
+        config = Self.storedConfig
+        levelCount = Self.storedLevelCount
+        layerIndex = Self.storedLayerIndex
+        showJson = Self.storedShowJson
+        showDeadEnds = Self.storedShowDeadEnds
+    }
+
     private enum SequenceParseError: LocalizedError {
         case message(String)
 
@@ -316,6 +397,17 @@ struct LevelGenerator2PreviewView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("\(title): \(String(format: "%.2f", value.wrappedValue))")
             Slider(value: value, in: range, step: 0.01)
+        }
+    }
+
+    private var mainRouteSlider: some View {
+        let binding = Binding<Double>(
+            get: { Double(config.mainRouteCount) },
+            set: { config.mainRouteCount = Int($0.rounded()) }
+        )
+        return VStack(alignment: .leading, spacing: 4) {
+            Text("Main Routes (k): \(config.mainRouteCount)")
+            Slider(value: binding, in: 1...8, step: 1)
         }
     }
 

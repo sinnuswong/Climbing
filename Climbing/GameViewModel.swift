@@ -16,12 +16,13 @@ final class GameViewModel: ObservableObject {
     private var hintTask: Task<Void, Never>?
     private var customLevel: Level?
     private var isCustomLevel: Bool = false
+    private var debugDeadEnds: Set<VoxelPoint> = []
 
     var onMovePlayer: ((VoxelPoint, Bool) -> Void)?
     var onShowPath: (([VoxelPoint]) -> Void)?
     var onClearPath: (() -> Void)?
     var onResetCamera: (() -> Void)?
-    var onLoadLevel: ((Level, VoxelPoint, VoxelPoint) -> Void)?
+    var onLoadLevel: ((Level, VoxelPoint, VoxelPoint, Set<VoxelPoint>) -> Void)?
 
     init() {
         let loadedLevels = LevelLoader.loadLevels()
@@ -33,7 +34,7 @@ final class GameViewModel: ObservableObject {
         currentHeight = initialLevel.start.z
     }
 
-    func connectScene(load: @escaping (Level, VoxelPoint, VoxelPoint) -> Void,
+    func connectScene(load: @escaping (Level, VoxelPoint, VoxelPoint, Set<VoxelPoint>) -> Void,
                       move: @escaping (VoxelPoint, Bool) -> Void,
                       showPath: @escaping ([VoxelPoint]) -> Void,
                       clearPath: @escaping () -> Void,
@@ -44,7 +45,7 @@ final class GameViewModel: ObservableObject {
         onClearPath = clearPath
         onResetCamera = resetCamera
 
-        load(level, playerPosition, goalPosition)
+        load(level, playerPosition, goalPosition, debugDeadEnds)
     }
 
     func handleTap(at point: VoxelPoint) {
@@ -99,8 +100,9 @@ final class GameViewModel: ObservableObject {
         showWinAlert = false
     }
 
-    func loadCustomLevel(_ level: Level) {
+    func loadCustomLevel(_ level: Level, debugDeadEnds: Set<VoxelPoint> = []) {
         customLevel = level
+        self.debugDeadEnds = debugDeadEnds
         applyLevel(level, index: 0, custom: true)
     }
 
@@ -151,7 +153,10 @@ final class GameViewModel: ObservableObject {
         playerPosition = newLevel.start
         goalPosition = newLevel.goal(from: newLevel.start)
         currentHeight = newLevel.start.z
-        onLoadLevel?(newLevel, playerPosition, goalPosition)
+        if !custom {
+            debugDeadEnds = []
+        }
+        onLoadLevel?(newLevel, playerPosition, goalPosition, debugDeadEnds)
     }
 
     private func findPath(from start: VoxelPoint) -> [VoxelPoint]? {

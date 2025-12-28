@@ -18,11 +18,13 @@ final class GameScene {
     private var playerEntity: ModelEntity?
     private var goalEntity: Entity?
     private var mapOffset = SIMD3<Float>(0, 0, 0)
+    private var deadEndPoints: Set<VoxelPoint> = []
 
     private var blockMaterial: UnlitMaterial
     private var topMaterial: UnlitMaterial
     private var highlightMaterial: UnlitMaterial
     private var playerMaterial: UnlitMaterial
+    private var deadEndMaterial: UnlitMaterial
 
     let cameraController: CameraController
 
@@ -42,18 +44,23 @@ final class GameScene {
             line: lineColor
         )
         playerMaterial = UnlitMaterial(color: UIColor(red: 0.15, green: 0.15, blue: 0.16, alpha: 1.0))
+        deadEndMaterial = GameScene.makeGridMaterial(
+            fill: UIColor(red: 0.62, green: 0.2, blue: 0.85, alpha: 1.0),
+            line: lineColor
+        )
         arView.cameraMode = .nonAR
         arView.environment.background = .color(.init(red: 0.95, green: 0.93, blue: 0.85, alpha: 1.0))
         arView.scene.anchors.append(rootAnchor)
         cameraController = CameraController(arView: arView)
     }
 
-    func build(level: Level, playerStart: VoxelPoint, goal: VoxelPoint) {
+    func build(level: Level, playerStart: VoxelPoint, goal: VoxelPoint, deadEnds: Set<VoxelPoint>) {
         self.level = level
         tileEntities.removeAll()
         highlighted.removeAll()
         rootAnchor.children.removeAll()
         goalEntity = nil
+        deadEndPoints = deadEnds
 
         mapOffset = SIMD3<Float>(blockSize / 2.0, 0, blockSize / 2.0)
 
@@ -90,7 +97,8 @@ final class GameScene {
                     guard level.isStandable(x: x, y: y, z: z) else { continue }
                     let topY = (Float(z) + 1.0) * blockSize + topLift
                     let topPosition = SIMD3<Float>(centerX, topY, centerZ)
-                    let top = ModelEntity(mesh: topMesh, materials: [topMaterial])
+                    let capMaterial = deadEndPoints.contains(VoxelPoint(x: x, y: y, z: z)) ? deadEndMaterial : topMaterial
+                    let top = ModelEntity(mesh: topMesh, materials: [capMaterial])
                     top.position = topPosition
                     top.name = "tile_\(x)_\(y)_\(z)"
                     top.collision = CollisionComponent(shapes: [.generateBox(size: SIMD3<Float>(blockSize, capThickness, blockSize))])
@@ -179,7 +187,8 @@ final class GameScene {
     func clearHighlights() {
         for point in highlighted {
             guard let tile = tileEntities[point] else { continue }
-            updateMaterial(of: tile, material: topMaterial)
+            let baseMaterial = deadEndPoints.contains(point) ? deadEndMaterial : topMaterial
+            updateMaterial(of: tile, material: baseMaterial)
         }
         highlighted.removeAll()
     }

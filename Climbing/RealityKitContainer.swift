@@ -10,8 +10,8 @@ struct RealityKitContainer: UIViewRepresentable {
         context.coordinator.scene = scene
 
         viewModel.connectScene(
-            load: { [weak scene] level, start, goal in
-                scene?.build(level: level, playerStart: start, goal: goal)
+            load: { [weak scene] level, start, goal, deadEnds in
+                scene?.build(level: level, playerStart: start, goal: goal, deadEnds: deadEnds)
             },
             move: { [weak scene] point, animated in
                 scene?.movePlayer(to: point, animated: animated)

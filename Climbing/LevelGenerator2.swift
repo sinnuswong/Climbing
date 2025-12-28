@@ -5,6 +5,7 @@ struct LevelGenerator2Config: Hashable, Codable {
     var depth: Int
     var height: Int
     var steps: Int
+    var mainRouteCount: Int
     var deadEndCount: Int
     var deadEndMinLength: Int
     var deadEndMaxLength: Int
@@ -19,6 +20,7 @@ struct LevelGenerator2Config: Hashable, Codable {
         depth: 9,
         height: 8,
         steps: 10,
+        mainRouteCount: 2,
         deadEndCount: 4,
         deadEndMinLength: 2,
         deadEndMaxLength: 5,
@@ -35,10 +37,22 @@ struct LevelGenerator2Result {
     let sequence: [Int]
 }
 
+struct LevelGenerator2DebugResult {
+    let level: Level
+    let sequence: [Int]
+    let deadEndPaths: [[VoxelPoint]]
+}
+
 enum LevelGenerator2 {
     private struct DeadEndBranch {
         let points: [VoxelPoint]
         let blocker: VoxelPoint?
+        let kind: DeadEndKind
+    }
+
+    private enum DeadEndKind {
+        case blockedMain
+        case branch
     }
 
     static func generateLevels(count: Int, config: LevelGenerator2Config) -> [Level] {
@@ -60,6 +74,13 @@ enum LevelGenerator2 {
     static func generateLevelWithSequence(id: Int,
                                           config: LevelGenerator2Config,
                                           seed: UInt64? = nil) -> LevelGenerator2Result {
+        let result = generateLevelWithDebug(id: id, config: config, seed: seed)
+        return LevelGenerator2Result(level: result.level, sequence: result.sequence)
+    }
+
+    static func generateLevelWithDebug(id: Int,
+                                       config: LevelGenerator2Config,
+                                       seed: UInt64? = nil) -> LevelGenerator2DebugResult {
         var rng = SeededGenerator(seed: seed ?? config.seed)
         let width = max(3, config.width)
         let depth = max(3, config.depth)
@@ -77,23 +98,31 @@ enum LevelGenerator2 {
                 continue
             }
 
-            let level = buildLevel(id: id,
-                                   width: width,
-                                   depth: depth,
-                                   height: height,
-                                   start: start,
-                                   path: pathData.path,
-                                   config: config,
-                                   rng: &rng)
+            let build = buildLevelWithDeadEnds(id: id,
+                                               width: width,
+                                               depth: depth,
+                                               height: height,
+                                               start: start,
+                                               path: pathData.path,
+                                               config: config,
+                                               rng: &rng)
+            let level = build.level
             let goal = level.goal(from: start)
             if let shortest = shortestPathLength(level: level, start: start, goal: goal),
                shortest >= maxSteps {
                 let sequence = pathData.sequence.map { $0.code }
-                return LevelGenerator2Result(level: level, sequence: sequence)
+                let deadEndPaths = build.deadEnds
+                    .filter { $0.kind == .blockedMain }
+                    .map { $0.points }
+                return LevelGenerator2DebugResult(level: level,
+                                                  sequence: sequence,
+                                                  deadEndPaths: deadEndPaths)
             }
         }
 
-        return LevelGenerator2Result(level: Level.sample(), sequence: [])
+        return LevelGenerator2DebugResult(level: Level.sample(),
+                                          sequence: [],
+                                          deadEndPaths: [])
     }
 
     static func encodeLevels(_ levels: [Level]) -> String {
@@ -112,6 +141,20 @@ enum LevelGenerator2 {
                                           seed: UInt64? = nil,
                                           enforceUniquePredecessor: Bool = true,
                                           autoExpand: Bool = false) -> Level? {
+        generateLevelFromSequenceDebug(id: id,
+                                       config: config,
+                                       sequence: sequence,
+                                       seed: seed,
+                                       enforceUniquePredecessor: enforceUniquePredecessor,
+                                       autoExpand: autoExpand)?.level
+    }
+
+    static func generateLevelFromSequenceDebug(id: Int,
+                                               config: LevelGenerator2Config,
+                                               sequence: [Int],
+                                               seed: UInt64? = nil,
+                                               enforceUniquePredecessor: Bool = true,
+                                               autoExpand: Bool = false) -> LevelGenerator2DebugResult? {
         var width = max(3, config.width)
         var depth = max(3, config.depth)
         var height = max(2, config.height)
@@ -144,20 +187,26 @@ enum LevelGenerator2 {
         for attempt in 0..<attemptCount {
             print("try \(attempt)")
             var rng = SeededGenerator(seed: (seed ?? config.seed) &+ UInt64(attempt) &* 9973)
-            let level = buildLevel(id: id,
-                                   width: width,
-                                   depth: depth,
-                                   height: height,
-                                   start: start,
-                                   path: path,
-                                   config: config,
-                                   rng: &rng)
-            let goal = level.goal(from: start)
+            let build = buildLevelWithDeadEnds(id: id,
+                                               width: width,
+                                               depth: depth,
+                                               height: height,
+                                               start: start,
+                                               path: path,
+                                               config: config,
+                                               rng: &rng)
+            let level = build.level
+            let goal = build.level.goal(from: start)
             if let shortest = shortestPathLength(level: level, start: start, goal: goal),
                shortest >= sequence.count-5 {
-                return level
+                let deadEndPaths = build.deadEnds
+                    .filter { $0.kind == .blockedMain }
+                    .map { $0.points }
+                return LevelGenerator2DebugResult(level: level,
+                                                  sequence: sequence,
+                                                  deadEndPaths: deadEndPaths)
             }
-            
+
         }
         print(" 11113")
 
@@ -401,14 +450,14 @@ enum LevelGenerator2 {
         return range.lowerBound + rng.nextInt(count)
     }
 
-    private static func buildLevel(id: Int,
-                                   width: Int,
-                                   depth: Int,
-                                   height: Int,
-                                   start: VoxelPoint,
-                                   path: [VoxelPoint],
-                                   config: LevelGenerator2Config,
-                                   rng: inout SeededGenerator) -> Level {
+    private static func buildLevelWithDeadEnds(id: Int,
+                                               width: Int,
+                                               depth: Int,
+                                               height: Int,
+                                               start: VoxelPoint,
+                                               path: [VoxelPoint],
+                                               config: LevelGenerator2Config,
+                                               rng: inout SeededGenerator) -> (level: Level, deadEnds: [DeadEndBranch]) {
         let pathColumns = Set(path.map { GridPoint(x: $0.x, y: $0.y) })
         var layers = Array(
             repeating: Array(repeating: Array(repeating: 0, count: width), count: depth),
@@ -488,7 +537,26 @@ enum LevelGenerator2 {
             }
         }
 
-        return Level(id: id, width: width, depth: depth, height: height, start: start, layers: layers)
+        let level = Level(id: id, width: width, depth: depth, height: height, start: start, layers: layers)
+        return (level, deadEnds)
+    }
+
+    private static func buildLevel(id: Int,
+                                   width: Int,
+                                   depth: Int,
+                                   height: Int,
+                                   start: VoxelPoint,
+                                   path: [VoxelPoint],
+                                   config: LevelGenerator2Config,
+                                   rng: inout SeededGenerator) -> Level {
+        buildLevelWithDeadEnds(id: id,
+                               width: width,
+                               depth: depth,
+                               height: height,
+                               start: start,
+                               path: path,
+                               config: config,
+                               rng: &rng).level
     }
 
     private static func generateDeadEnds(path: [VoxelPoint],
@@ -497,7 +565,9 @@ enum LevelGenerator2 {
                                          height: Int,
                                          config: LevelGenerator2Config,
                                          rng: inout SeededGenerator) -> [DeadEndBranch] {
-        let count = max(0, config.deadEndCount)
+        let blockedMainCount = max(0, config.mainRouteCount - 1)
+        let branchCount = max(0, config.deadEndCount)
+        let count = blockedMainCount + branchCount
         guard count > 0, path.count > 2 else { return [] }
         let minLength = max(1, config.deadEndMinLength)
         let maxLength = max(minLength, config.deadEndMaxLength)
@@ -505,15 +575,38 @@ enum LevelGenerator2 {
         var reserved = pathColumns
         var deadEnds: [DeadEndBranch] = []
         let goal = path.last ?? path[0]
+        var kinds: [DeadEndKind] = []
+        if blockedMainCount > 0 {
+            kinds.append(contentsOf: Array(repeating: .blockedMain, count: blockedMainCount))
+        }
+        if branchCount > 0 {
+            kinds.append(contentsOf: Array(repeating: .branch, count: branchCount))
+        }
+        kinds.shuffle(using: &rng)
 
-        for _ in 0..<count {
+        for kind in kinds {
             var created = false
             for _ in 0..<80 {
-                let startIndex = 1 + rng.nextInt(max(1, path.count - 2))
+                let startUpperBound: Int
+                if kind == .blockedMain {
+                    startUpperBound = max(1, (path.count - 2) / 3)
+                } else {
+                    startUpperBound = max(1, path.count - 2)
+                }
+                let startIndex: Int
+                if kind == .blockedMain {
+                    startIndex = rng.nextInt(startUpperBound + 1)
+                } else {
+                    startIndex = 1 + rng.nextInt(startUpperBound)
+                }
                 let start = path[startIndex]
-                let length = minLength + rng.nextInt(maxLength - minLength + 1)
-                let blockedRoute = rng.nextDouble() < 0.5
-                let target = blockedRoute ? goal : nil
+                let length: Int
+                if kind == .blockedMain {
+                    length = maxLength
+                } else {
+                    length = minLength + rng.nextInt(maxLength - minLength + 1)
+                }
+                let target = kind == .blockedMain ? goal : nil
 
                 guard let branch = generateBranch(from: start,
                                                   length: length,
@@ -527,17 +620,21 @@ enum LevelGenerator2 {
                     continue
                 }
 
-                let blocker = blockedRoute
-                    ? generateBlocker(from: branch.last,
-                                      pathColumns: pathColumns,
-                                      reserved: reserved,
-                                      width: width,
-                                      depth: depth,
-                                      height: height,
-                                      rng: &rng)
-                    : nil
-                deadEnds.append(DeadEndBranch(points: branch, blocker: blocker))
-                for point in branch {
+                let branchData: (points: [VoxelPoint], blocker: VoxelPoint?)?
+                if kind == .blockedMain {
+                    branchData = splitBranchForBlocker(branch,
+                                                       height: height,
+                                                       rng: &rng)
+                } else {
+                    branchData = (branch, nil)
+                }
+                guard let branchData else { continue }
+                let blocker = branchData.blocker
+                if kind == .blockedMain && blocker == nil { continue }
+                deadEnds.append(DeadEndBranch(points: branchData.points,
+                                              blocker: blocker,
+                                              kind: kind))
+                for point in branchData.points {
                     reserved.insert(GridPoint(x: point.x, y: point.y))
                 }
                 if let blocker = blocker {
@@ -610,35 +707,27 @@ enum LevelGenerator2 {
         return branch
     }
 
-    private static func generateBlocker(from end: VoxelPoint?,
-                                        pathColumns: Set<GridPoint>,
-                                        reserved: Set<GridPoint>,
-                                        width: Int,
-                                        depth: Int,
-                                        height: Int,
-                                        rng: inout SeededGenerator) -> VoxelPoint? {
-        guard let end = end else { return nil }
-        let directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]
-        var candidates: [VoxelPoint] = []
-        for dir in directions {
-            let nx = end.x + dir.0
-            let ny = end.y + dir.1
-            if nx < 0 || nx >= width || ny < 0 || ny >= depth { continue }
-            let column = GridPoint(x: nx, y: ny)
-            if reserved.contains(column) { continue }
-            if hasAdjacentPathColumn(column,
-                                     pathColumns: pathColumns,
-                                     width: width,
-                                     depth: depth,
-                                     excluding: nil) {
-                continue
-            }
-            let blockerZ = end.z + 2
-            if blockerZ >= height { continue }
-            candidates.append(VoxelPoint(x: nx, y: ny, z: blockerZ))
+    private static func splitBranchForBlocker(_ branch: [VoxelPoint],
+                                              height: Int,
+                                              rng: inout SeededGenerator) -> (points: [VoxelPoint], blocker: VoxelPoint?)? {
+        guard branch.count >= 2 else { return nil }
+        let cutMax = branch.count - 2
+        let cutIndex: Int
+        if cutMax >= 1 {
+            cutIndex = 1 + rng.nextInt(cutMax)
+        } else {
+            cutIndex = 0
         }
-        return candidates.randomElement(using: &rng)
+        let end = branch[cutIndex]
+        let blockedColumn = branch[cutIndex + 1]
+        let blockerZ = end.z + 2
+        if blockerZ >= height { return nil }
+        let blocker = VoxelPoint(x: blockedColumn.x, y: blockedColumn.y, z: blockerZ)
+        let points = Array(branch.prefix(cutIndex + 1))
+        return (points, blocker)
     }
+
+    
 
     private static func buildBlockedColumns(pathColumns: Set<GridPoint>,
                                             deadEnds: [DeadEndBranch],
