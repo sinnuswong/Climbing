@@ -11,6 +11,9 @@ struct LevelGeneratorPreviewView: View {
     @State private var didCopy = false
     @State private var layerIndex: Int = 0
     private let onPlayLevel: (Level) -> Void
+    private let configStorageKey = "LevelGeneratorConfig"
+    private let levelCountStorageKey = "LevelGeneratorLevelCount"
+    private let layerStorageKey = "LevelGeneratorLayerIndex"
 
     init(onPlayLevel: @escaping (Level) -> Void = { _ in }) {
         self.onPlayLevel = onPlayLevel
@@ -35,7 +38,19 @@ struct LevelGeneratorPreviewView: View {
                 }
             }
         }
-        .onAppear { regenerate() }
+        .onAppear {
+            loadSavedState()
+            regenerate()
+        }
+        .onChange(of: config) { _ in
+            saveState()
+        }
+        .onChange(of: levelCount) { _ in
+            saveState()
+        }
+        .onChange(of: layerIndex) { _ in
+            saveState()
+        }
     }
 
     private var levelGrid: some View {
@@ -75,6 +90,9 @@ struct LevelGeneratorPreviewView: View {
             Stepper("Height: \(config.height)", value: $config.height, in: 4...20)
             Stepper("Levels: \(levelCount)", value: $levelCount, in: 1...30)
             Stepper("Layer: \(layerIndex)", value: $layerIndex, in: 0...max(level.height - 1, 0))
+            Stepper("Dead Ends: \(config.deadEndCount)", value: $config.deadEndCount, in: 0...20)
+            Stepper("Dead End Min: \(config.deadEndMinLength)", value: $config.deadEndMinLength, in: 1...10)
+            Stepper("Dead End Max: \(config.deadEndMaxLength)", value: $config.deadEndMaxLength, in: config.deadEndMinLength...12)
 
             sliderRow(title: "Fill Chance", value: $config.fillChance, range: 0.0...0.4)
             sliderRow(title: "Height Falloff", value: $config.heightFalloff, range: 0.0...0.8)
@@ -122,6 +140,31 @@ struct LevelGeneratorPreviewView: View {
         level = LevelGenerator.generateLevel(id: 1, config: config)
         didCopy = false
         layerIndex = min(layerIndex, max(level.height - 1, 0))
+    }
+
+    private func loadSavedState() {
+        let defaults = UserDefaults.standard
+        if let data = defaults.data(forKey: configStorageKey),
+           let saved = try? JSONDecoder().decode(LevelGeneratorConfig.self, from: data) {
+            config = saved
+        }
+        let savedCount = defaults.integer(forKey: levelCountStorageKey)
+        if savedCount > 0 {
+            levelCount = savedCount
+        }
+        let savedLayer = defaults.integer(forKey: layerStorageKey)
+        if savedLayer >= 0 {
+            layerIndex = savedLayer
+        }
+    }
+
+    private func saveState() {
+        let defaults = UserDefaults.standard
+        if let data = try? JSONEncoder().encode(config) {
+            defaults.set(data, forKey: configStorageKey)
+        }
+        defaults.set(levelCount, forKey: levelCountStorageKey)
+        defaults.set(layerIndex, forKey: layerStorageKey)
     }
 
     private var jsonString: String {

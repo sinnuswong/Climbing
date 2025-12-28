@@ -1,6 +1,6 @@
 import Foundation
 
-struct LevelGeneratorConfig: Hashable {
+struct LevelGeneratorConfig: Hashable, Codable {
     var width: Int
     var depth: Int
     var height: Int
@@ -8,6 +8,9 @@ struct LevelGeneratorConfig: Hashable {
     var heightFalloff: Double
     var pairChance: Double
     var plateauBreakChance: Double
+    var deadEndCount: Int
+    var deadEndMinLength: Int
+    var deadEndMaxLength: Int
     var pathLengthFactor: Double
     var avoidEdgeBias: Double
     var turnBias: Double
@@ -22,6 +25,9 @@ struct LevelGeneratorConfig: Hashable {
         heightFalloff: 0.45,
         pairChance: 0.6,
         plateauBreakChance: 0.3,
+        deadEndCount: 4,
+        deadEndMinLength: 2,
+        deadEndMaxLength: 5,
         pathLengthFactor: 0.65,
         avoidEdgeBias: 0.65,
         turnBias: 0.6,
@@ -93,6 +99,33 @@ enum LevelGenerator {
                 }
             }
 
+            let deadEnds = generateDeadEnds(path: path,
+                                            pathHeights: pathHeights,
+                                            width: width,
+                                            depth: depth,
+                                            config: config,
+                                            rng: &rng)
+            var blockedFill = Set<VoxelPoint>()
+            for deadEnd in deadEnds {
+                for point in deadEnd.points {
+                    let z = deadEnd.height
+                    for supportZ in 0...z {
+                        layers[supportZ][point.y][point.x] = 1
+                    }
+                    protectedBlocks.insert(VoxelPoint(x: point.x, y: point.y, z: z))
+                    if z + 1 < height {
+                        protectedAbove.insert(VoxelPoint(x: point.x, y: point.y, z: z + 1))
+                    }
+                }
+                if let last = deadEnd.points.last {
+                    let neighbors = neighborPoints(of: last, width: width, depth: depth)
+                    for neighbor in neighbors {
+                        if let previous = deadEnd.previous, previous == neighbor { continue }
+                        blockedFill.insert(VoxelPoint(x: neighbor.x, y: neighbor.y, z: deadEnd.height))
+                    }
+                }
+            }
+
             let fillChance = clamp(config.fillChance, min: 0.0, max: 0.45)
             let heightFalloff = clamp(config.heightFalloff, min: 0.0, max: 0.85)
             let pairChance = clamp(config.pairChance, min: 0.0, max: 0.9)
@@ -110,6 +143,7 @@ enum LevelGenerator {
                                      depth: depth,
                                      z: z,
                                      protectedAbove: protectedAbove,
+                                     blockedFill: blockedFill,
                                      rng: &rng) {
                             remaining -= 2
                             continue
@@ -120,6 +154,7 @@ enum LevelGenerator {
                                    depth: depth,
                                    z: z,
                                    protectedAbove: protectedAbove,
+                                   blockedFill: blockedFill,
                                    rng: &rng) {
                         remaining -= 1
                     }
@@ -293,11 +328,13 @@ enum LevelGenerator {
                                     depth: Int,
                                     z: Int,
                                     protectedAbove: Set<VoxelPoint>,
+                                    blockedFill: Set<VoxelPoint>,
                                     rng: inout SeededGenerator) -> Bool {
         let x = rng.nextInt(width)
         let y = rng.nextInt(depth)
         if layers[z][y][x] != 0 { return false }
         if protectedAbove.contains(VoxelPoint(x: x, y: y, z: z)) { return false }
+        if blockedFill.contains(VoxelPoint(x: x, y: y, z: z)) { return false }
         if !isSupported(layers: layers, x: x, y: y, z: z) { return false }
         layers[z][y][x] = 1
         return true
@@ -308,6 +345,7 @@ enum LevelGenerator {
                                   depth: Int,
                                   z: Int,
                                   protectedAbove: Set<VoxelPoint>,
+                                  blockedFill: Set<VoxelPoint>,
                                   rng: inout SeededGenerator) -> Bool {
         let directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]
         let dir = directions[rng.nextInt(directions.count)]
@@ -319,6 +357,8 @@ enum LevelGenerator {
         if layers[z][y][x] != 0 || layers[z][ny][nx] != 0 { return false }
         if protectedAbove.contains(VoxelPoint(x: x, y: y, z: z)) { return false }
         if protectedAbove.contains(VoxelPoint(x: nx, y: ny, z: z)) { return false }
+        if blockedFill.contains(VoxelPoint(x: x, y: y, z: z)) { return false }
+        if blockedFill.contains(VoxelPoint(x: nx, y: ny, z: z)) { return false }
         let supportA = isSupported(layers: layers, x: x, y: y, z: z)
         let supportB = isSupported(layers: layers, x: nx, y: ny, z: z)
         if supportA == supportB { return false }
@@ -330,6 +370,85 @@ enum LevelGenerator {
     private static func isSupported(layers: [[[Int]]], x: Int, y: Int, z: Int) -> Bool {
         if z == 0 { return true }
         return layers[z - 1][y][x] != 0
+    }
+
+    private struct DeadEndBranch {
+        let points: [GridPoint]
+        let height: Int
+        let previous: GridPoint?
+    }
+
+    private static func generateDeadEnds(path: [GridPoint],
+                                         pathHeights: [Int],
+                                         width: Int,
+                                         depth: Int,
+                                         config: LevelGeneratorConfig,
+                                         rng: inout SeededGenerator) -> [DeadEndBranch] {
+        let count = max(0, config.deadEndCount)
+        guard count > 0, path.count > 2 else { return [] }
+        let minLength = max(1, config.deadEndMinLength)
+        let maxLength = max(minLength, config.deadEndMaxLength)
+        var used = Set(path)
+        var candidates = Array(1..<(path.count - 1))
+        shuffle(&candidates, rng: &rng)
+        var branches: [DeadEndBranch] = []
+
+        for index in candidates {
+            if branches.count >= count { break }
+            let start = path[index]
+            let height = pathHeights[index]
+            let length = minLength + rng.nextInt(maxLength - minLength + 1)
+            if let branch = generateDeadEndBranch(from: start,
+                                                  length: length,
+                                                  used: &used,
+                                                  width: width,
+                                                  depth: depth,
+                                                  rng: &rng) {
+                let previous = branch.count > 1 ? branch[branch.count - 2] : start
+                branches.append(DeadEndBranch(points: branch, height: height, previous: previous))
+            }
+        }
+
+        return branches
+    }
+
+    private static func generateDeadEndBranch(from start: GridPoint,
+                                              length: Int,
+                                              used: inout Set<GridPoint>,
+                                              width: Int,
+                                              depth: Int,
+                                              rng: inout SeededGenerator) -> [GridPoint]? {
+        guard length > 0 else { return nil }
+        var branch: [GridPoint] = []
+        var localUsed = used
+        var current = start
+        var lastDirection: GridPoint?
+
+        for _ in 0..<length {
+            let neighbors = neighborPoints(of: current, width: width, depth: depth)
+                .filter { !localUsed.contains($0) }
+            if neighbors.isEmpty { return nil }
+            var weighted: [(GridPoint, Double)] = []
+            weighted.reserveCapacity(neighbors.count)
+            for neighbor in neighbors {
+                var weight = 1.0
+                if let lastDirection {
+                    let delta = GridPoint(x: neighbor.x - current.x, y: neighbor.y - current.y)
+                    if delta.x == lastDirection.x && delta.y == lastDirection.y {
+                        weight *= 1.6
+                    }
+                }
+                weighted.append((neighbor, weight))
+            }
+            let next = chooseWeighted(weighted, rng: &rng)
+            let delta = GridPoint(x: next.x - current.x, y: next.y - current.y)
+            lastDirection = delta
+            branch.append(next)
+            localUsed.insert(next)
+            current = next
+        }
+        used = localUsed
+        return branch
     }
 
     private static func erodePlateaus(layers: inout [[[Int]]],

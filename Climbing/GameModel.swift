@@ -65,7 +65,13 @@ extension Level {
     func landingHeight(from current: VoxelPoint, to column: GridPoint) -> Int? {
         let heights = standHeights(at: column)
         guard !heights.isEmpty else { return nil }
-        let climbCandidates = heights.filter { $0 - current.z <= 1 }
+        let hasCeiling = isSolid(x: current.x, y: current.y, z: current.z + 1)
+        let climbCandidates: [Int]
+        if hasCeiling {
+            climbCandidates = heights.filter { $0 <= current.z }
+        } else {
+            climbCandidates = heights.filter { $0 - current.z <= 1 }
+        }
         if let highest = climbCandidates.max() {
             return highest
         }

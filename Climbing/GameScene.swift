@@ -55,9 +55,7 @@ final class GameScene {
         rootAnchor.children.removeAll()
         goalEntity = nil
 
-        let mapWidth = Float(level.width - 1) * blockSize
-        let mapDepth = Float(level.depth - 1) * blockSize
-        mapOffset = SIMD3<Float>(-mapWidth / 2.0, 0, -mapDepth / 2.0)
+        mapOffset = SIMD3<Float>(blockSize / 2.0, 0, blockSize / 2.0)
 
         let cubeMesh = MeshResource.generateBox(size: blockSize)
         let topMesh = MeshResource.generatePlane(width: blockSize, depth: blockSize)

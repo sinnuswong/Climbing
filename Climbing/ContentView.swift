@@ -11,6 +11,7 @@ struct ContentView: View {
     @StateObject private var viewModel = GameViewModel()
 #if DEBUG
     @State private var showGenerator = false
+    @State private var showGenerator2 = false
 #endif
 
     var body: some View {
@@ -29,6 +30,11 @@ struct ContentView: View {
 #if DEBUG
         .sheet(isPresented: $showGenerator) {
             LevelGeneratorPreviewView { level in
+                viewModel.loadCustomLevel(level)
+            }
+        }
+        .sheet(isPresented: $showGenerator2) {
+            LevelGenerator2PreviewView { level in
                 viewModel.loadCustomLevel(level)
             }
         }
@@ -61,6 +67,7 @@ struct ContentView: View {
                 Button("Reset View") { viewModel.resetCamera() }
 #if DEBUG
                 Button("Generator") { showGenerator = true }
+                Button("Generator2") { showGenerator2 = true }
 #endif
             }
             .font(.headline)

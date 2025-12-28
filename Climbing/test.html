@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>等距垂直迷宫 - 逆向算法版</title>
+    <style>
+        body { margin: 0; background: #dfe6e9; display: flex; flex-direction: column; align-items: center; font-family: sans-serif; overflow: hidden; }
+        .ui-panel { position: absolute; top: 20px; text-align: center; z-index: 10; pointer-events: none; }
+        .btn { padding: 12px 25px; background: #2d3436; color: white; border: none; border-radius: 20px; cursor: pointer; pointer-events: auto; font-weight: bold; transition: 0.3s; }
+        .btn:hover { background: #636e72; transform: translateY(-2px); }
+        canvas { cursor: crosshair; }
+        #hint { color: #d63031; font-weight: bold; margin-top: 10px; min-height: 20px; }
+    </style>
+</head>
+<body>
+    <div class="ui-panel">
+        <h2 style="color: #2d3436; margin-bottom: 5px;">等距立体攀爬</h2>
+        <button class="btn" onclick="resetGame()">生成必通关卡</button>
+        <div id="hint"></div>
+    </div>
+    <canvas id="gameCanvas"></canvas>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const hintEl = document.getElementById('hint');
+
+const GRID = 10;
+const TILE_W = 32; 
+let grid = [];
+let player = { x: 0, y: 0 };
+let target = { x: GRID-1, y: GRID-1 };
+let isMoving = false;
+
+function resetGame() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    generateValidLevel();
+    draw();
+}
+
+/**
+ * 核心算法：逆向生成必通路径
+ */
+function generateValidLevel() {
+    // 1. 初始高度全部为 0
+    grid = Array(GRID).fill().map(() => Array(GRID).fill(0));
+    
+    // 2. 设定起点高度
+    let cx = 0, cy = 0;
+    grid[cx][cy] = 1;
+    player = { x: cx, y: cy };
+
+    // 3. 逆向生长一条可达路径到终点
+    let path = [{x: cx, y: cy}];
+    let currentH = 1;
+
+    // 强制路径向终点延伸，但允许绕路增加迷惑性
+    while (cx < GRID - 1 || cy < GRID - 1) {
+        let directions = [];
+        if (cx < GRID - 1) directions.push({x: 1, y: 0});
+        if (cy < GRID - 1) directions.push({x: 0, y: 1});
+        // 偶尔允许往回走一步增加曲折度
+        if (cx > 0 && Math.random() < 0.1) directions.push({x: -1, y: 0});
+        
+        let move = directions[Math.floor(Math.random() * directions.length)];
+        cx += move.x;
+        cy += move.y;
+        
+        // 关键逻辑：高度差只允许 0 或 1
+        if (Math.random() > 0.4) currentH += 1;
+        grid[cx][cy] = currentH;
+        path.push({x: cx, y: cy});
+    }
+    target = { x: cx, y: cy };
+
+    // 4. 填充“假路径”和“迷惑方块”
+    // 在主路径周围填充随机高度，但要制造断层
+    for (let i = 0; i < GRID; i++) {
+        for (let j = 0; j < GRID; j++) {
+            if (grid[i][j] === 0) {
+                // 生成一个与邻近主路径高度差 > 1 的高度，造成“看得见摸不着”的错觉
+                grid[i][j] = Math.floor(Math.random() * (currentH + 2)) + 1;
+            }
+        }
+    }
+}
+
+function getPos(x, y, z) {
+    const ox = canvas.width / 2;
+    const oy = canvas.height / 2 + 100;
+    return {
+        x: ox + (x - y) * TILE_W,
+        y: oy - (x + y) * (TILE_W / 2) - (z * TILE_W * 0.8)
+    };
+}
+
+function drawCube(x, y, z, type) {
+    const p = getPos(x, y, z);
+    const w = TILE_W;
+    const h = TILE_W * 0.8;
+
+    // 颜色配置
+    let top = "#81ecec", side1 = "#00cec9", side2 = "#00b894";
+    if (type === 'player') top = "#fab1a0";
+    if (type === 'target') top = "#ff7675";
+
+    // 顶面
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y - h);
+    ctx.lineTo(p.x + w, p.y - h + w/2);
+    ctx.lineTo(p.x, p.y - h + w);
+    ctx.lineTo(p.x - w, p.y - h + w/2);
+    ctx.closePath();
+    ctx.fillStyle = top;
+    ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,0.15)";
+    ctx.stroke();
+
+    // 侧面
+    const drawSide = (points, color) => {
+        ctx.beginPath();
+        points.forEach((pt, i) => i === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y));
+        ctx.closePath();
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.stroke();
+    };
+
+    // 右侧
+    drawSide([
+        {x: p.x, y: p.y - h + w},
+        {x: p.x + w, y: p.y - h + w/2},
+        {x: p.x + w, y: p.y + w/2},
+        {x: p.x, y: p.y + w}
+    ], side1);
+
+    // 左侧
+    drawSide([
+        {x: p.x, y: p.y - h + w},
+        {x: p.x - w, y: p.y - h + w/2},
+        {x: p.x - w, y: p.y + w/2},
+        {x: p.x, y: p.y + w}
+    ], side2);
+}
+
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // 渲染循环（画家算法，从后往前）
+    for (let i = 0; i < GRID; i++) {
+        for (let j = 0; j < GRID; j++) {
+            for (let z = 0; z < grid[i][j]; z++) {
+                let type = 'normal';
+                if (i === target.x && j === target.y && z === grid[i][j]-1) type = 'target';
+                drawCube(i, j, z, type);
+            }
+            // 绘制玩家小球
+            if (i === player.x && j === player.y) {
+                const p = getPos(i, j, grid[i][j]);
+                ctx.beginPath();
+                ctx.arc(p.x, p.y - 15, 8, 0, Math.PI*2);
+                ctx.fillStyle = "#d63031";
+                ctx.fill();
+                ctx.strokeStyle = "white";
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+        }
+    }
+}
+
+// A* 寻路（带高度限制）
+function findPath(x1, y1, x2, y2) {
+    let queue = [{x: x1, y: y1, p: []}];
+    let visited = new Set();
+    while(queue.length > 0) {
+        let c = queue.shift();
+        if(c.x === x2 && c.y === y2) return c.p;
+        let key = `${c.x},${c.y}`;
+        if(visited.has(key)) continue;
+        visited.add(key);
+
+        [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx, dy]) => {
+            let nx = c.x + dx, ny = c.y + dy;
+            if(nx>=0 && nx<GRID && ny>=0 && ny<GRID) {
+                // 核心：高度差必须为 -1, 0, 或 1
+                if(Math.abs(grid[nx][ny] - grid[c.x][c.y]) <= 1) {
+                    queue.push({x: nx, y: ny, p: [...c.p, {x:nx, y:ny}]});
+                }
+            }
+        });
+    }
+    return null;
+}
+
+canvas.onclick = (e) => {
+    if(isMoving) return;
+    // 寻找点击了哪个网格
+    for(let i=GRID-1; i>=0; i--) {
+        for(let j=GRID-1; j>=0; j--) {
+            const p = getPos(i, j, grid[i][j]);
+            const d = Math.hypot(p.x - e.clientX, p.y - (e.clientY + 20)); // 偏移修正
+            if(d < 25) {
+                const path = findPath(player.x, player.y, i, j);
+                if(path) animateMove(path);
+                else {
+                    hintEl.innerText = "不可达！高度差太大了";
+                    setTimeout(() => hintEl.innerText="", 2000);
+                }
+                return;
+            }
+        }
+    }
+}
+
+function animateMove(path) {
+    if(path.length === 0) {
+        isMoving = false;
+        if(player.x === target.x && player.y === target.y) alert("到达顶峰！");
+        return;
+    }
+    isMoving = true;
+    let next = path.shift();
+    player.x = next.x;
+    player.y = next.y;
+    draw();
+    setTimeout(() => animateMove(path), 150);
+}
+
+window.onresize = resetGame;
+resetGame();
+</script>
+</body>
+</html>
